@@ -3,6 +3,8 @@ use crossterm::event::KeyEvent;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::voice::playback::{PlaybackController, PlaybackStatus};
+
 use super::core_types::{BufferState, EditorState, ViewMode};
 use crate::demo_script::DemoScript;
 use crate::highlights::HighlightData;
@@ -76,4 +78,17 @@ pub struct Editor {
   pub cursor_currently_visible: bool,
   // Track if we just switched buffers to skip centering
   pub buffer_just_switched: bool,
+  // Voice / TTS state
+  pub voice_controller: Option<PlaybackController>,
+  pub voice_status: PlaybackStatus,
+  pub voice_error: Option<String>,
+  // Paragraph range of the currently-playing passage (doc line indices)
+  pub voice_para_start: usize,
+  pub voice_para_end: usize,
+  // When the current chunk started and how many chars precede it
+  pub voice_started_at: Option<std::time::Instant>,
+  pub voice_chars_before: usize,
+  // Reading mode state
+  pub reading_mode: bool,
+  pub continuous_reading: bool,
 }

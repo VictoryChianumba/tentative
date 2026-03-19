@@ -225,11 +225,53 @@ impl Editor {
       // Handle keyboard input
       if std::io::stdout().is_terminal() {
         self.debug_log("Waiting for keyboard event...");
+        // Poll voice status and redraw if something changed
+        {
+          use crate::voice::PlaybackStatus;
+          let prev_status = self.voice_status.clone();
+          let prev_error = self.voice_error.clone();
+          self.sync_voice_status();
+          if self.voice_status != prev_status || self.voice_error != prev_error {
+            self.mark_dirty();
+          }
+          // Auto-advance continuous reading when a paragraph finishes
+          if self.continuous_reading
+            && matches!(prev_status, PlaybackStatus::Playing)
+            && matches!(self.voice_status, PlaybackStatus::Idle)
+            && self.voice_error.is_none()
+          {
+            if !self.advance_to_next_paragraph_for_continuous_reading() {
+              self.continuous_reading = false;
+            }
+            self.mark_dirty();
+          }
+        }
+
         // Use longer timeout when idle to reduce CPU usage
+        let voice_loading = matches!(
+          self.voice_status,
+          crate::voice::PlaybackStatus::Loading
+        );
+        let voice_active = voice_loading
+          || !matches!(
+            self.voice_status,
+            crate::voice::PlaybackStatus::Idle
+          )
+          || self.voice_error.is_some();
+
+        // Keep redrawing while the spinner is animating
+        if voice_loading {
+          self.mark_dirty();
+        }
+
         let timeout = if self.needs_redraw || self.tutorial_demo_mode {
-          std::time::Duration::from_millis(16) // ~60fps when animating or in demo mode
+          std::time::Duration::from_millis(16)
+        } else if voice_loading {
+          std::time::Duration::from_millis(100) // smooth spinner at ~10fps
+        } else if voice_active {
+          std::time::Duration::from_millis(250)
         } else {
-          std::time::Duration::from_millis(250) // Slower when idle
+          std::time::Duration::from_millis(250)
         };
 
         // Check for demo script actions

@@ -1,6 +1,7 @@
 mod bookmarks;
 mod config;
 mod core_state;
+mod voice;
 mod core_types;
 mod debug;
 pub mod demo_components;
