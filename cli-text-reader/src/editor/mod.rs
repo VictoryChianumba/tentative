@@ -58,6 +58,7 @@ mod visual_mode_control;
 mod visual_mode_find;
 mod visual_mode_movement;
 mod visual_mode_objects;
+mod voice_control;
 mod word_navigation;
 mod yank;
 

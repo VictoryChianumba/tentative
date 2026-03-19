@@ -132,6 +132,15 @@ impl Editor {
       last_saved_viewport_offset: 0,
       cursor_currently_visible: true,
       buffer_just_switched: false,
+      voice_controller: None,
+      voice_status: crate::voice::PlaybackStatus::Idle,
+      voice_error: None,
+      voice_para_start: 0,
+      voice_para_end: 0,
+      voice_started_at: None,
+      voice_chars_before: 0,
+      reading_mode: false,
+      continuous_reading: false,
     }
   }
 

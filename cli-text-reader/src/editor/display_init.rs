@@ -10,6 +10,7 @@ use crate::bookmarks::load_bookmarks;
 use crate::config::load_config;
 use crate::highlights::load_highlights;
 use crate::progress::load_progress;
+use crate::voice::playback::PlaybackController;
 
 impl Editor {
   pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -19,6 +20,14 @@ impl Editor {
     self.show_highlighter = config.enable_line_highlighter.unwrap_or(true);
     self.show_cursor = config.show_cursor.unwrap_or(true);
     self.show_progress = config.show_progress.unwrap_or(true);
+
+    // Initialise voice controller if an API key is configured
+    if !config.elevenlabs_api_key.is_empty() {
+      self.voice_controller = Some(PlaybackController::new(
+        config.elevenlabs_api_key.clone(),
+        config.voice_id.clone(),
+      ));
+    }
 
     // Check if tutorial should be shown
     let tutorial_enabled = config.enable_tutorial.unwrap_or(true);
