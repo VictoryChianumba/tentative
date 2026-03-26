@@ -125,6 +125,11 @@ impl Editor {
           // Show status line and position info
           self.draw_status_line_buffered(&mut render_buffer)?;
 
+          // Settings popup overlay
+          if self.show_settings {
+            self.draw_settings_popup_buffered(&mut render_buffer)?;
+          }
+
           // Render demo hint if active
           if self.tutorial_demo_mode {
             self.render_demo_hint_buffered(
@@ -210,7 +215,7 @@ impl Editor {
       } else {
         // Even if not redrawing, ensure cursor is visible and positioned
         // correctly But do it efficiently with a single write
-        if self.show_cursor && std::io::stdout().is_terminal() {
+        if self.show_cursor && !self.show_settings && std::io::stdout().is_terminal() {
           use crossterm::QueueableCommand;
           let mut buffer = Vec::new();
           buffer.queue(crossterm::cursor::Show)?;
@@ -262,6 +267,16 @@ impl Editor {
         // Keep redrawing while the spinner is animating
         if voice_loading {
           self.mark_dirty();
+        }
+
+        // Keep redrawing while "Saved." banner is visible; clear when expired
+        if let Some(until) = self.settings_saved_until {
+          if std::time::Instant::now() >= until {
+            self.settings_saved_until = None;
+            self.mark_dirty();
+          } else {
+            self.mark_dirty();
+          }
         }
 
         let timeout = if self.needs_redraw || self.tutorial_demo_mode {
@@ -325,6 +340,13 @@ impl Editor {
         if event::poll(timeout)? {
           match event::read()? {
             CEvent::Key(key_event) => {
+              // Catch-all keypress log — written before any filtering or dispatch
+              log::debug!(
+                "keypress: code={:?} modifiers={:?} kind={:?}",
+                key_event.code,
+                key_event.modifiers,
+                key_event.kind
+              );
               // On Windows, crossterm sends both Press and Release events
               // We only want to process Press events to avoid double input
               if key_event.kind != crossterm::event::KeyEventKind::Press {

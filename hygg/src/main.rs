@@ -116,6 +116,20 @@ pub fn which(binary: &str) -> Option<std::path::PathBuf> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let log_path = dirs::home_dir()
+    .unwrap()
+    .join(".config/hygg/hygg.log");
+  std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+  let log_file = std::fs::OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open(&log_path)
+    .unwrap();
+  env_logger::Builder::new()
+    .target(env_logger::Target::Pipe(Box::new(log_file)))
+    .filter_level(log::LevelFilter::Debug)
+    .init();
+
   let args = Args::parse();
 
   // Check if stdin has content

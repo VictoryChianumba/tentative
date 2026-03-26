@@ -9,6 +9,7 @@ members = [
   "redirect-stderr",
   "hygg-shared",
   "hygg",
+  "tentative",
 
   # Internal
   # "examples",

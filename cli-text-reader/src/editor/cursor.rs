@@ -179,7 +179,7 @@ impl Editor {
     buffer: &mut Vec<u8>,
     center_offset: usize,
   ) -> io::Result<()> {
-    if !self.show_cursor {
+    if !self.show_cursor || self.show_settings {
       // Cursor should remain hidden
       return Ok(());
     }

@@ -141,6 +141,11 @@ impl Editor {
       voice_chars_before: 0,
       reading_mode: false,
       continuous_reading: false,
+      show_settings: false,
+      settings_cursor: 0,
+      settings_fields: [String::new(), String::new(), String::new()],
+      settings_editing: false,
+      settings_saved_until: None,
     }
   }
 

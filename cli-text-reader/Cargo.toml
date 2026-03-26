@@ -30,6 +30,7 @@ dotenvy = "0.15"
 ureq = { version = "2.12", features = ["json"] }
 lazy_static = "1.5"
 rodio = "0.19"
+log = "0.4"
 
 arboard = { version = "3", default-features = true }
 [target.'cfg(target_os = "linux")'.dependencies.arboard]

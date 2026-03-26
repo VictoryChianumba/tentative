@@ -15,6 +15,12 @@ impl Editor {
       "=== handle_event: key={:?}, active_buffer={}, active_mode={:?}, view_mode={:?} ===",
       key_event, self.active_buffer, active_mode, self.view_mode
     ));
+    // Settings popup intercepts all keys while open
+    if self.show_settings {
+      if let Some(result) = self.handle_settings_key(key_event)? {
+        return Ok(result);
+      }
+    }
 
     // Route to mode-specific handlers first
     let result = match active_mode {
