@@ -91,4 +91,10 @@ pub struct Editor {
   // Reading mode state
   pub reading_mode: bool,
   pub continuous_reading: bool,
+  // Settings popup state
+  pub show_settings: bool,
+  pub settings_cursor: usize,
+  pub settings_fields: [String; 3],
+  pub settings_editing: bool,
+  pub settings_saved_until: Option<std::time::Instant>,
 }
