@@ -99,4 +99,6 @@ pub struct Editor {
   pub settings_fields: [String; 3],
   pub settings_editing: bool,
   pub settings_saved_until: Option<std::time::Instant>,
+  /// Waiting for the next key to complete Ctrl+R <register> in command mode.
+  pub awaiting_register_key: bool,
 }
