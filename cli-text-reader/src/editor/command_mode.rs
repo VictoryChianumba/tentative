@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers};
+use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::core::{Editor, EditorMode};
 
@@ -13,6 +13,28 @@ impl Editor {
       "  Command buffer: '{}', cursor_pos: {}",
       self.editor_state.command_buffer, self.editor_state.command_cursor_pos
     ));
+
+    // Consume pending register key for Ctrl+R <register>
+    if self.awaiting_register_key {
+      self.awaiting_register_key = false;
+      if key_event.code == KeyCode::Char('0') {
+        let pos = self.editor_state.command_cursor_pos;
+        let yank_text = self.editor_state.yank_buffer.clone();
+        let clean_text = yank_text.replace('\n', " ").replace('\r', "");
+        self.editor_state.command_buffer.insert_str(pos, &clean_text);
+        self.editor_state.command_cursor_pos += clean_text.len();
+        if let Some(buffer) = self.buffers.get_mut(self.active_buffer) {
+          buffer.command_buffer.insert_str(pos, &clean_text);
+          buffer.command_cursor_pos = self.editor_state.command_cursor_pos;
+        }
+        if self.tutorial_active {
+          self.tutorial_paste_performed = true;
+          self.debug_log("Tutorial: paste performed via Ctrl+R 0");
+        }
+      }
+      // Other registers not implemented; key is consumed regardless.
+      return Ok(false);
+    }
 
     // Handle Ctrl+C to exit to normal mode
     if key_event.code == KeyCode::Char('c')
@@ -138,45 +160,8 @@ impl Editor {
       KeyCode::Char('r')
         if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
       {
-        // Ctrl+R in command mode - paste from register
-        if let CEvent::Key(register_key) = event::read()?
-          && let KeyCode::Char('0') = register_key.code
-        {
-          // Paste from yank buffer (register 0) at cursor position
-          let pos = self.editor_state.command_cursor_pos;
-          let yank_text = self.editor_state.yank_buffer.clone();
-          self.debug_log_event(
-            "command_mode",
-            "paste_register_0",
-            &format!("yank_buffer='{yank_text}', pos={pos}"),
-          );
-
-          // Remove newlines from yanked text to prevent command execution
-          let clean_text = yank_text.replace('\n', " ").replace('\r', "");
-          self.debug_log_state("command_mode", "clean_text", &clean_text);
-
-          self.editor_state.command_buffer.insert_str(pos, &clean_text);
-          self.editor_state.command_cursor_pos += clean_text.len();
-
-          // Also update active buffer's command buffer
-          if let Some(buffer) = self.buffers.get_mut(self.active_buffer) {
-            buffer.command_buffer.insert_str(pos, &clean_text);
-            buffer.command_cursor_pos = self.editor_state.command_cursor_pos;
-          }
-
-          // Track paste for tutorial
-          if self.tutorial_active {
-            self.tutorial_paste_performed = true;
-            self.debug_log("Tutorial: paste performed via Ctrl+R 0");
-          }
-
-          self.debug_log_state(
-            "command_mode",
-            "new_command_buffer",
-            &self.editor_state.command_buffer,
-          );
-        }
-        // Other registers not implemented yet
+        // Mark that the next key should be treated as a register name.
+        self.awaiting_register_key = true;
       }
       KeyCode::Char('v')
         if key_event.modifiers.contains(KeyModifiers::CONTROL) =>

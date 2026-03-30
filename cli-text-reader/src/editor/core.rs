@@ -148,6 +148,7 @@ impl Editor {
       settings_fields: [String::new(), String::new(), String::new()],
       settings_editing: false,
       settings_saved_until: None,
+      awaiting_register_key: false,
     }
   }
 
