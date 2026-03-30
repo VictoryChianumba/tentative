@@ -193,20 +193,23 @@ impl Editor {
   }
 
   pub fn update_layout(&mut self, area: Rect) {
+    let layout_changed = self.viewport != area;
     self.viewport = area;
     self.width = area.width as usize;
     self.height = area.height as usize;
 
-    let viewport_height = self.height.saturating_sub(1).max(1);
+    let viewport_height =
+      self.viewport.height.saturating_sub(1).max(1) as usize;
     if let Some(buffer) = self.buffers.get_mut(self.active_buffer) {
       buffer.viewport_height = viewport_height;
     }
 
-    if self.initial_setup_complete {
+    if layout_changed && self.initial_setup_complete {
       self.center_cursor();
+    } else if layout_changed {
+      self.mark_dirty();
     }
-    self.force_clear = true;
-    self.mark_dirty();
+    self.force_clear |= layout_changed;
   }
 
   // Helper methods to access active buffer's mode and command state
@@ -298,10 +301,10 @@ impl Editor {
       if let Some(buffer) = self.buffers.get(self.active_buffer) {
         buffer.viewport_height
       } else {
-        self.height.saturating_sub(1)
+        self.viewport.height.saturating_sub(1) as usize
       }
     } else {
-      self.height.saturating_sub(1)
+      self.viewport.height.saturating_sub(1) as usize
     }
   }
 }
