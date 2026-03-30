@@ -66,6 +66,7 @@ mod visual_mode_movement;
 mod visual_mode_objects;
 mod voice_control;
 mod widget;
+mod widgets;
 mod word_navigation;
 mod yank;
 
