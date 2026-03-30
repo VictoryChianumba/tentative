@@ -24,6 +24,7 @@ mod display_init;
 mod display_loop;
 mod display_split;
 mod event_handler;
+mod highlight_spans;
 mod highlighting;
 mod highlighting_persistent;
 mod highlighting_selection;
