@@ -38,6 +38,7 @@ mod normal_navigation_find;
 mod normal_navigation_jumps;
 mod normal_search_visual;
 mod page_navigation;
+mod render_lines;
 mod runtime;
 mod screen_position;
 mod search_mode;
