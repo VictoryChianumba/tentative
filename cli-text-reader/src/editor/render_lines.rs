@@ -1,6 +1,9 @@
 use ratatui::{layout::Rect, prelude::*};
 
-use super::core::Editor;
+use super::{
+  core::Editor,
+  highlight_spans::{self, StyleRange},
+};
 use crate::voice::PlaybackStatus;
 
 pub struct RenderedLine {
@@ -31,11 +34,7 @@ pub fn build_viewport_lines(editor: &Editor, area: Rect) -> Vec<RenderedLine> {
         && !is_overscroll_blank
         && (document_line_index < editor.voice_para_start
           || document_line_index > editor.voice_para_end);
-      let line_style = if is_current_line && editor.show_highlighter {
-        Style::default().bg(Color::Rgb(40, 40, 40))
-      } else {
-        Style::default()
-      };
+      let line_style = editor.current_line_style_for_row(screen_row);
       let content = if is_overscroll_blank {
         String::new()
       } else {
@@ -45,13 +44,17 @@ pub fn build_viewport_lines(editor: &Editor, area: Rect) -> Vec<RenderedLine> {
       RenderedLine {
         document_line_index: (!is_overscroll_blank)
           .then_some(document_line_index),
-        spans: build_line_spans(
+        spans: highlight_spans::build_styled_spans(
           editor,
-          area,
-          document_line_index,
+          (!is_overscroll_blank).then_some(document_line_index),
           &content,
-          is_dimmed_line,
-          voice_word,
+          &" ".repeat(content_x_offset(editor, area) as usize),
+          if is_dimmed_line {
+            Style::default().fg(Color::DarkGray)
+          } else {
+            Style::default()
+          },
+          voice_style_ranges(document_line_index, &content, voice_word),
         ),
         line_style,
         is_current_line,
@@ -71,23 +74,11 @@ pub fn content_x_offset(editor: &Editor, area: Rect) -> u16 {
   }
 }
 
-fn build_line_spans(
-  editor: &Editor,
-  area: Rect,
+fn voice_style_ranges(
   document_line_index: usize,
   content: &str,
-  is_dimmed_line: bool,
   voice_word: Option<(usize, usize, usize)>,
-) -> Vec<Span<'static>> {
-  let padding = " ".repeat(content_x_offset(editor, area) as usize);
-
-  if is_dimmed_line {
-    return vec![Span::styled(
-      format!("{padding}{content}"),
-      Style::default().fg(Color::DarkGray),
-    )];
-  }
-
+) -> Vec<StyleRange> {
   if let Some((line_index, word_start, word_end)) = voice_word
     && line_index == document_line_index
     && word_start < word_end
@@ -95,17 +86,15 @@ fn build_line_spans(
   {
     let word_start = word_start.min(content.len());
     let word_end = word_end.min(content.len());
-    return vec![
-      Span::raw(format!("{padding}{}", &content[..word_start])),
-      Span::styled(
-        content[word_start..word_end].to_string(),
-        Style::default().add_modifier(Modifier::REVERSED),
-      ),
-      Span::raw(content[word_end..].to_string()),
-    ];
+    return vec![StyleRange {
+      start: word_start,
+      end: word_end,
+      style: Style::default().add_modifier(Modifier::REVERSED),
+      priority: 40,
+    }];
   }
 
-  vec![Span::raw(format!("{padding}{content}"))]
+  Vec::new()
 }
 
 fn is_voice_rendering_active(editor: &Editor) -> bool {
