@@ -36,8 +36,8 @@ cargo fmt --check
 # Lint
 cargo clippy
 
-# Build tentative separately
-cargo build -p tentative --release
+# Build trench separately
+cargo build -p trench --release
 ```
 
 Rust edition: 2024, MSRV: 1.88. The `ci.sh` script uses the nightly toolchain for `cargo fix`, `cargo udeps`, and `cargo audit`.
@@ -52,7 +52,7 @@ cli-epub-to-text/  → EPUB → plain text conversion
 cli-justify/       → text justification/wrapping
 hygg-shared/       → shared utilities
 redirect-stderr/   → stderr redirection helper
-tentative/         → separate binary: AI research feed aggregator TUI
+trench/            → separate binary: AI research feed aggregator TUI
 ```
 
 **hygg pipeline**: arg parsing → OCR (optional, via `ocrmypdf`) → format conversion (PDF/EPUB/pandoc) → `cli-justify::justify()` → `cli-text-reader::run_cli_text_reader()`.
@@ -91,9 +91,9 @@ This crate is the core. Everything is implemented as `impl Editor` blocks spread
 - Handler functions return `Result<Option<bool>, ...>`: `Some(true)` = quit, `Some(false)` = handled (stop propagation), `None` = not handled (continue to next handler).
 - `self.offset` = first visible line index; `self.cursor_y` = cursor row on screen; `self.offset + self.cursor_y` = current doc line.
 
-## tentative Architecture
+## trench Architecture
 
-A separate TUI binary (`tentative/src/main.rs`) that aggregates AI research feeds. No async — uses `std::sync::mpsc` and `reqwest::blocking` throughout.
+A separate TUI binary (`trench/src/main.rs`) that aggregates AI research feeds. No async — uses `std::sync::mpsc` and `reqwest::blocking` throughout.
 
 ### Data model (`src/models/`)
 
@@ -108,7 +108,7 @@ Background thread in `main.rs` fetches all sources sequentially then runs enrich
 1. `arxiv::fetch()` — arXiv Atom API (cs.LG + cs.AI + stat.ML). Maps category codes via `map_arxiv_category()`, detects subtopics via `detect_subtopics()`.
 2. `huggingface::fetch()` — Scrapes HF daily papers page (two-pass: h3 for titles, entity-encoded JSON for upvotes/authors), then makes one batched arXiv API call to fill `summary_short` for all items.
 3. `rss::fetch()` — Generic RSS 2.0 / Atom parser for OpenAI blog, DeepMind blog, Import AI, The Batch. Handles CDATA via `Event::CData`. Anthropic has no RSS feed and is intentionally skipped.
-4. `semantic_scholar::enrich()` — Enriches arXiv items with citation counts and fields of study. 7-day TTL cache at `~/.config/tentative/enrichment_cache.json`. Entries with empty `fields_of_study` are invalidated on load.
+4. `semantic_scholar::enrich()` — Enriches arXiv items with citation counts and fields of study. 7-day TTL cache at `~/.config/trench/enrichment_cache.json`. Entries with empty `fields_of_study` are invalidated on load.
 
 Each source sends `FetchMessage::Items(Vec<FeedItem>)` + `FetchMessage::SourceComplete(name)` over mpsc. After all sources, sends enriched batch + `AllComplete`.
 
@@ -118,11 +118,11 @@ Each source sends `FetchMessage::Items(Vec<FeedItem>)` + `FetchMessage::SourceCo
 - **URL dedup**: overwrites cached item with fresh data; workflow state comes from `persisted_states` (keyed by URL).
 - **ArXiv ID dedup**: collapses HF and arXiv entries for the same paper — arXiv entry wins. The HF entry's `workflow_state` is preserved onto the arXiv entry when replacing.
 
-Items are sorted by `published_at` descending after each batch. Cache is written to `~/.config/tentative/cache.json` immediately.
+Items are sorted by `published_at` descending after each batch. Cache is written to `~/.config/trench/cache.json` immediately.
 
 ### Store (`src/store/`)
 
-- `store::load()` / `store::save()` — workflow states, keyed by URL, at `~/.config/tentative/state.json`.
+- `store::load()` / `store::save()` — workflow states, keyed by URL, at `~/.config/trench/state.json`.
 - `store::cache` — full `Vec<FeedItem>` cache, loaded at startup so the TUI is populated before network fetches complete.
 - `store::enrichment_cache` — Semantic Scholar results, 7-day TTL via Julian Day Number arithmetic (no chrono).
 
@@ -271,6 +271,19 @@ Before finishing any piece of work, ask:
 - Does every element earn its place?
 
 If the answer to any of these is no, keep refining.
+
+## Tentative Visual Design Language
+
+Tentative should use a quiet research-interface design language:
+- Shared frames and split containers over independently boxed widgets.
+- Muted slate borders and separators.
+- Section titles embedded into divider/header lines.
+- Baby blue for primary accent/actionable content.
+- Darker luminous blue for section and column headers.
+- Selection should use row/background treatment, not bright borders.
+- Footers should be calm command text.
+- Repo viewer, chat, and notes should feel structurally consistent with feed/details.
+- Reader mode is a separate long-form reading design pass.
 
 ## Design Principles
 

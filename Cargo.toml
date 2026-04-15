@@ -9,7 +9,7 @@ members = [
   "redirect-stderr",
   "hygg-shared",
   "hygg",
-  "tentative",
+  "trench",
   "crates/notes",
   "crates/chat",
 

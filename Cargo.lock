@@ -3591,33 +3591,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tentative"
-version = "0.1.19"
-dependencies = [
- "arboard",
- "chat",
- "chrono",
- "cli-text-reader",
- "crossterm",
- "dirs 5.0.1",
- "env_logger",
- "html2text",
- "log",
- "notes",
- "pulldown-cmark",
- "quick-xml 0.36.2",
- "ratatui",
- "readability",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "syntect",
- "textwrap",
- "url",
-]
-
-[[package]]
 name = "textwrap"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3898,6 +3871,33 @@ dependencies = [
  "nom",
  "once_cell",
  "petgraph",
+]
+
+[[package]]
+name = "trench"
+version = "0.1.19"
+dependencies = [
+ "arboard",
+ "chat",
+ "chrono",
+ "cli-text-reader",
+ "crossterm",
+ "dirs 5.0.1",
+ "env_logger",
+ "html2text",
+ "log",
+ "notes",
+ "pulldown-cmark",
+ "quick-xml 0.36.2",
+ "ratatui",
+ "readability",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "syntect",
+ "textwrap",
+ "url",
 ]
 
 [[package]]
