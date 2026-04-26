@@ -139,50 +139,9 @@ struct FileContent {
   encoding: Option<String>,
 }
 
-// ── Base64 decoder ───────────────────────────────────────────────────────────
-
 fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
-  let mut map = [255u8; 256];
-  for (i, &c) in
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-      .iter()
-      .enumerate()
-  {
-    map[c as usize] = i as u8;
-  }
-
-  let bytes: Vec<u8> =
-    s.bytes().filter(|&b| b != b'=' && map[b as usize] != 255).collect();
-
-  let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 3);
-  let mut i = 0;
-
-  while i + 4 <= bytes.len() {
-    let n = (map[bytes[i] as usize] as u32) << 18
-      | (map[bytes[i + 1] as usize] as u32) << 12
-      | (map[bytes[i + 2] as usize] as u32) << 6
-      | (map[bytes[i + 3] as usize] as u32);
-    out.push((n >> 16) as u8);
-    out.push((n >> 8) as u8);
-    out.push(n as u8);
-    i += 4;
-  }
-
-  match bytes.len() - i {
-    2 => {
-      let n = (map[bytes[i] as usize] as u32) << 18
-        | (map[bytes[i + 1] as usize] as u32) << 12;
-      out.push((n >> 16) as u8);
-    }
-    3 => {
-      let n = (map[bytes[i] as usize] as u32) << 18
-        | (map[bytes[i + 1] as usize] as u32) << 12
-        | (map[bytes[i + 2] as usize] as u32) << 6;
-      out.push((n >> 16) as u8);
-      out.push((n >> 8) as u8);
-    }
-    _ => {}
-  }
-
-  Ok(out)
+  use base64::Engine;
+  base64::engine::general_purpose::STANDARD
+    .decode(s)
+    .map_err(|e| format!("base64 decode error: {e}"))
 }

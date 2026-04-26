@@ -1,75 +1,84 @@
 use std::io::{self, Read, Seek, SeekFrom};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
 
 struct Inner {
   data: Vec<u8>,
   done: bool,
 }
 
-/// Reader end — implements `Read + Seek`, blocks until data is available.
+/// Reader end — implements `Read + Seek`, blocks on the condvar until data arrives.
 pub struct StreamBuffer {
-  inner: Arc<Mutex<Inner>>,
+  shared: Arc<(Mutex<Inner>, Condvar)>,
   pos: usize,
 }
 
 /// Writer end — pushed from the network thread.
 pub struct StreamWriter {
-  inner: Arc<Mutex<Inner>>,
+  shared: Arc<(Mutex<Inner>, Condvar)>,
 }
 
 impl StreamBuffer {
   pub fn new() -> (Self, StreamWriter) {
-    let inner = Arc::new(Mutex::new(Inner { data: Vec::new(), done: false }));
-    (StreamBuffer { inner: Arc::clone(&inner), pos: 0 }, StreamWriter { inner })
+    let shared = Arc::new((
+      Mutex::new(Inner { data: Vec::new(), done: false }),
+      Condvar::new(),
+    ));
+    (
+      StreamBuffer { shared: Arc::clone(&shared), pos: 0 },
+      StreamWriter { shared },
+    )
   }
 
   pub fn buffered_len(&self) -> usize {
-    self.inner.lock().unwrap().data.len()
+    self.shared.0.lock().unwrap().data.len()
   }
 
   pub fn is_done(&self) -> bool {
-    self.inner.lock().unwrap().done
+    self.shared.0.lock().unwrap().done
   }
 }
 
 impl StreamWriter {
   pub fn push(&self, chunk: &[u8]) {
-    self.inner.lock().unwrap().data.extend_from_slice(chunk);
+    let (lock, cvar) = &*self.shared;
+    lock.lock().unwrap().data.extend_from_slice(chunk);
+    cvar.notify_all();
   }
 
   pub fn finish(self) {
-    self.inner.lock().unwrap().done = true;
+    let (lock, cvar) = &*self.shared;
+    lock.lock().unwrap().done = true;
+    cvar.notify_all();
   }
 }
 
 impl Read for StreamBuffer {
   fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    let (lock, cvar) = &*self.shared;
+    let mut inner = lock.lock().unwrap();
     loop {
-      {
-        let inner = self.inner.lock().unwrap();
-        let available = inner.data.len().saturating_sub(self.pos);
-        if available > 0 {
-          let n = available.min(buf.len());
-          buf[..n].copy_from_slice(&inner.data[self.pos..self.pos + n]);
-          drop(inner);
-          self.pos += n;
-          return Ok(n);
-        }
-        if inner.done {
-          return Ok(0);
-        }
+      let available = inner.data.len().saturating_sub(self.pos);
+      if available > 0 {
+        let n = available.min(buf.len());
+        buf[..n].copy_from_slice(&inner.data[self.pos..self.pos + n]);
+        drop(inner);
+        self.pos += n;
+        return Ok(n);
       }
-      thread::sleep(Duration::from_millis(5));
+      if inner.done {
+        return Ok(0);
+      }
+      inner = cvar.wait(inner).unwrap();
     }
   }
 }
 
 impl Seek for StreamBuffer {
   fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+    let (lock, cvar) = &*self.shared;
+
     let (len, done) = {
-      let inner = self.inner.lock().unwrap();
+      let inner = lock.lock().unwrap();
       (inner.data.len(), inner.done)
     };
 
@@ -99,14 +108,12 @@ impl Seek for StreamBuffer {
 
     let new_pos = new_pos as usize;
 
-    // Forward seek past what we have: block until bytes arrive
-    loop {
-      let inner = self.inner.lock().unwrap();
-      if inner.data.len() >= new_pos || inner.done {
-        break;
+    // Forward seek past what we have: wait on condvar until bytes arrive.
+    {
+      let mut inner = lock.lock().unwrap();
+      while inner.data.len() < new_pos && !inner.done {
+        inner = cvar.wait(inner).unwrap();
       }
-      drop(inner);
-      thread::sleep(Duration::from_millis(5));
     }
 
     self.pos = new_pos;
