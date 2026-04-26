@@ -4,6 +4,7 @@ use crate::ingestion::message::FetchMessage;
 use crate::models::*;
 use chrono::Utc;
 use ratatui::layout::Rect;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -307,7 +308,26 @@ pub struct App {
   pub help_active: bool,
   pub help_section: usize,
   pub help_scroll: u16,
+
+  // Cached indices of items visible under the current search/filter.
+  // Keyed by (FeedTab) so a tab switch automatically misses the cache.
+  visible_cache: RefCell<Option<(FeedTab, Vec<usize>)>>,
 }
+
+// Offsets within the filter panel after the dynamic source rows.
+// Must stay in sync with the order items are rendered in ui/layout.rs.
+const FILTER_SIGNAL_PRIMARY: usize = 0;
+const FILTER_SIGNAL_SECONDARY: usize = 1;
+const FILTER_SIGNAL_TERTIARY: usize = 2;
+const FILTER_CONTENT_PAPER: usize = 3;
+const FILTER_CONTENT_ARTICLE: usize = 4;
+const FILTER_CONTENT_DIGEST: usize = 5;
+const FILTER_WF_INBOX: usize = 6;
+const FILTER_WF_SKIMMED: usize = 7;
+const FILTER_WF_QUEUED: usize = 8;
+const FILTER_WF_DEEPREAD: usize = 9;
+const FILTER_WF_ARCHIVED: usize = 10;
+const FILTER_CLEAR_ALL: usize = 11;
 
 impl App {
   pub fn new() -> Self {
@@ -381,6 +401,7 @@ impl App {
       help_active: false,
       help_section: 0,
       help_scroll: 0,
+      visible_cache: RefCell::new(None),
       panes: vec![
         PaneInfo::new(PaneId::Feed),
         PaneInfo::new(PaneId::Reader),
@@ -485,13 +506,21 @@ impl App {
 
   /// Items visible after applying search and category filters.
   pub fn visible_items(&self) -> Vec<&FeedItem> {
+    {
+      let cache = self.visible_cache.borrow();
+      if let Some((tab, ref indices)) = *cache {
+        if tab == self.feed_tab {
+          let items = self.items_for_tab();
+          return indices.iter().map(|&i| &items[i]).collect();
+        }
+      }
+    }
     let q = self.search_query.to_lowercase();
-    self
-      .items_for_tab()
+    let items = self.items_for_tab();
+    let indices: Vec<usize> = items
       .iter()
-      .filter(|item| {
-        // Hide items whose source is explicitly disabled in config.
-        // HuggingFace items carry source_name="hf"; map to the config key.
+      .enumerate()
+      .filter(|(_, item)| {
         let key = if item.source_platform
           == crate::models::SourcePlatform::HuggingFace
         {
@@ -504,17 +533,22 @@ impl App {
             return false;
           }
         }
-
-        if !q.is_empty() {
-          if !item.title.to_lowercase().contains(&q)
-            && !item.authors.iter().any(|a| a.to_lowercase().contains(&q))
-          {
-            return false;
-          }
+        if !q.is_empty()
+          && !item.title.to_lowercase().contains(&q)
+          && !item.authors.iter().any(|a| a.to_lowercase().contains(&q))
+        {
+          return false;
         }
         self.active_filters.matches(item)
       })
-      .collect()
+      .map(|(i, _)| i)
+      .collect();
+    *self.visible_cache.borrow_mut() = Some((self.feed_tab, indices.clone()));
+    indices.iter().map(|&i| &items[i]).collect()
+  }
+
+  pub(crate) fn invalidate_visible_cache(&self) {
+    *self.visible_cache.borrow_mut() = None;
   }
 
   pub fn items_for_tab(&self) -> &[FeedItem] {
@@ -560,6 +594,7 @@ impl App {
   }
 
   pub fn reset_active_feed_position(&mut self) {
+    self.invalidate_visible_cache();
     self.set_active_selected_index(0);
     self.set_active_list_offset(0);
     self.details_scroll = 0;
@@ -1059,6 +1094,7 @@ impl App {
 
     if had_items {
       self.items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+      self.invalidate_visible_cache();
       crate::store::cache::save(&self.items);
       if was_empty {
         self.list_offset = 0;
@@ -1147,6 +1183,7 @@ impl App {
       self.discovery_items.push(item);
     }
     self.discovery_items.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+    self.invalidate_visible_cache();
   }
 
   pub fn filter_cursor_down(&mut self) {
@@ -1196,45 +1233,47 @@ impl App {
       }
     } else {
       match c - src_count {
-        0 => toggle_set(&mut self.active_filters.signals, SignalLevel::Primary),
-        1 => {
+        FILTER_SIGNAL_PRIMARY => {
+          toggle_set(&mut self.active_filters.signals, SignalLevel::Primary)
+        }
+        FILTER_SIGNAL_SECONDARY => {
           toggle_set(&mut self.active_filters.signals, SignalLevel::Secondary)
         }
-        2 => {
+        FILTER_SIGNAL_TERTIARY => {
           toggle_set(&mut self.active_filters.signals, SignalLevel::Tertiary)
         }
-        3 => {
+        FILTER_CONTENT_PAPER => {
           toggle_set(&mut self.active_filters.content_types, ContentType::Paper)
         }
-        4 => toggle_set(
+        FILTER_CONTENT_ARTICLE => toggle_set(
           &mut self.active_filters.content_types,
           ContentType::Article,
         ),
-        5 => toggle_set(
+        FILTER_CONTENT_DIGEST => toggle_set(
           &mut self.active_filters.content_types,
           ContentType::Digest,
         ),
-        6 => toggle_set(
+        FILTER_WF_INBOX => toggle_set(
           &mut self.active_filters.workflow_states,
           WorkflowState::Inbox,
         ),
-        7 => toggle_set(
+        FILTER_WF_SKIMMED => toggle_set(
           &mut self.active_filters.workflow_states,
           WorkflowState::Skimmed,
         ),
-        8 => toggle_set(
+        FILTER_WF_QUEUED => toggle_set(
           &mut self.active_filters.workflow_states,
           WorkflowState::Queued,
         ),
-        9 => toggle_set(
+        FILTER_WF_DEEPREAD => toggle_set(
           &mut self.active_filters.workflow_states,
           WorkflowState::DeepRead,
         ),
-        10 => toggle_set(
+        FILTER_WF_ARCHIVED => toggle_set(
           &mut self.active_filters.workflow_states,
           WorkflowState::Archived,
         ),
-        11 => self.active_filters = FilterState::new(),
+        FILTER_CLEAR_ALL => self.active_filters = FilterState::new(),
         _ => {}
       }
     }

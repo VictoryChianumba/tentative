@@ -80,21 +80,21 @@ pub fn parse_secure_command(cmd: &str) -> Result<SecureCommand, String> {
   .cloned()
   .collect();
 
-  // Split command into parts
-  let parts: Vec<&str> = cmd_to_parse.split_whitespace().collect();
+  // Shell-quote-aware tokenisation so filenames with spaces work correctly.
+  let parts: Vec<String> = shlex::split(cmd_to_parse)
+    .ok_or_else(|| "Malformed quoting in command".to_string())?;
   if parts.is_empty() {
     return Err("Invalid command".to_string());
   }
 
-  let program = parts[0];
+  let program = &parts[0];
 
   // Check if command is whitelisted
-  if !allowed_commands.contains(program) {
+  if !allowed_commands.contains(program.as_str()) {
     return Err(format!("Command '{program}' is not allowed"));
   }
 
-  // Reject shell metacharacters in arguments. We do not use a shell to execute
-  // commands, but some commands (awk, sed) interpret these themselves.
+  // Reject shell metacharacters in the post-split tokens.
   let dangerous_chars: &[char] =
     &['|', '&', ';', '`', '$', '(', ')', '<', '>', '\\', '*', '?'];
 
@@ -112,8 +112,8 @@ pub fn parse_secure_command(cmd: &str) -> Result<SecureCommand, String> {
   }
 
   Ok(SecureCommand {
-    program: program.to_string(),
-    args: parts[1..].iter().map(|s| s.to_string()).collect(),
+    program: program.clone(),
+    args: parts[1..].to_vec(),
   })
 }
 
@@ -202,5 +202,16 @@ mod tests {
         "{input} should be rejected"
       );
     }
+  }
+
+  #[test]
+  fn test_quoted_filenames() {
+    let result = parse_secure_command("cat 'my file.txt'").unwrap();
+    assert_eq!(result.program, "cat");
+    assert_eq!(result.args, vec!["my file.txt"]);
+
+    let result = parse_secure_command(r#"cat "my file.txt""#).unwrap();
+    assert_eq!(result.program, "cat");
+    assert_eq!(result.args, vec!["my file.txt"]);
   }
 }
