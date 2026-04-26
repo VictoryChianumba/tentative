@@ -405,6 +405,7 @@ pub(crate) fn force_refresh(app: &mut App) {
   app.is_refreshing = false;
   app.fetch_rx = None;
   app.items.clear();
+  app.invalidate_visible_cache();
   do_refresh(app);
 }
 

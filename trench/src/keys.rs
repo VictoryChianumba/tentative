@@ -577,6 +577,7 @@ fn handle_sources_popup(key: KeyEvent, app: &mut App) -> bool {
             .unwrap_or(true);
           app.config.sources.enabled_sources.insert(src.to_string(), !cur);
           app.config.save();
+          app.invalidate_visible_cache();
           force_refresh(app);
         }
         // custom feeds: no toggle (present = enabled, use d to delete)
