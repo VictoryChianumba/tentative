@@ -1,10 +1,8 @@
 use crate::config::Config;
 use crate::discovery::{DiscoveredRssFeed, DiscoveredSource, DiscoveryPlan};
+use chat::provider::ChatProvider;
 use serde::Deserialize;
-use serde_json::{Value, json};
-
-const CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
-const OPENAI_MODEL: &str = "gpt-4o";
+use serde_json::Value;
 
 pub fn run_ai_query(
   topic: &str,
@@ -57,91 +55,26 @@ Rules:
 }
 
 fn query_claude(api_key: &str, prompt: &str) -> Result<String, String> {
-  #[derive(Deserialize)]
-  struct ClaudeBlock {
-    text: String,
-  }
-  #[derive(Deserialize)]
-  struct ClaudeResponse {
-    content: Vec<ClaudeBlock>,
-  }
-
-  let body = json!({
-    "model": CLAUDE_MODEL,
-    "max_tokens": 1024,
-    "messages": [{ "role": "user", "content": prompt }],
-  });
-
-  let client = reqwest::blocking::Client::new();
-  let resp = client
-    .post("https://api.anthropic.com/v1/messages")
-    .header("x-api-key", api_key)
-    .header("anthropic-version", "2023-06-01")
-    .header("content-type", "application/json")
-    .json(&body)
-    .send()
-    .map_err(|e| format!("Claude request failed: {e}"))?;
-
-  let status = resp.status();
-  let text =
-    resp.text().map_err(|e| format!("Claude body read failed: {e}"))?;
-  if !status.is_success() {
-    return Err(format!("Claude API error {}: {}", status.as_u16(), text));
-  }
-
-  let parsed: ClaudeResponse = serde_json::from_str(&text)
-    .map_err(|e| format!("Claude response parse failed: {e}"))?;
-  parsed
-    .content
-    .into_iter()
-    .next()
-    .map(|b| b.text)
-    .ok_or_else(|| "Claude response had no content".to_string())
+  send_prompt(chat::ClaudeProvider::new(api_key), prompt)
 }
 
 fn query_openai(api_key: &str, prompt: &str) -> Result<String, String> {
-  #[derive(Deserialize)]
-  struct OpenAiMessage {
-    content: String,
-  }
-  #[derive(Deserialize)]
-  struct OpenAiChoice {
-    message: OpenAiMessage,
-  }
-  #[derive(Deserialize)]
-  struct OpenAiResponse {
-    choices: Vec<OpenAiChoice>,
-  }
+  send_prompt(chat::OpenAiProvider::new(api_key), prompt)
+}
 
-  let body = json!({
-    "model": OPENAI_MODEL,
-    "messages": [{ "role": "user", "content": prompt }],
-  });
-
-  let client = reqwest::blocking::Client::new();
-  let resp = client
-    .post("https://api.openai.com/v1/chat/completions")
-    .header("Authorization", format!("Bearer {api_key}"))
-    .header("content-type", "application/json")
-    .json(&body)
-    .send()
-    .map_err(|e| format!("OpenAI request failed: {e}"))?;
-
-  let status = resp.status();
-  let text =
-    resp.text().map_err(|e| format!("OpenAI body read failed: {e}"))?;
-  if !status.is_success() {
-    return Err(format!("OpenAI API error {}: {}", status.as_u16(), text));
-  }
-
-  let parsed: OpenAiResponse = serde_json::from_str(&text)
-    .map_err(|e| format!("OpenAI response parse failed: {e}"))?;
-  parsed
-    .choices
-    .into_iter()
-    .next()
-    .map(|c| c.message.content)
-    .ok_or_else(|| "OpenAI response had no choices".to_string())
+fn send_prompt(
+  provider: impl ChatProvider,
+  prompt: &str,
+) -> Result<String, String> {
+  let messages = vec![chat::ChatMessage {
+    role: chat::Role::User,
+    content: prompt.to_string(),
+    timestamp: chrono::Utc::now(),
+  }];
+  provider
+    .send(&messages)
+    .map(|r| r.content)
+    .map_err(|e| e.to_string())
 }
 
 fn parse_plan(topic: &str, content: &str) -> Result<DiscoveryPlan, String> {
