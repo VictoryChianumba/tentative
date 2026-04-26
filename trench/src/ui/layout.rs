@@ -1022,7 +1022,6 @@ fn draw_details_panel(frame: &mut Frame, app: &mut App, area: Rect) {
       })
       .sum();
 
-    // Clamp at render time — don't write back while item is borrowed.
     let max_scroll = physical_lines.saturating_sub(visible_height);
     let scroll = app.details_scroll.min(max_scroll);
 
@@ -1031,6 +1030,8 @@ fn draw_details_panel(frame: &mut Frame, app: &mut App, area: Rect) {
       .scroll((scroll as u16, 0));
     let t_para = std::time::Instant::now();
     frame.render_widget(para, inner);
+    // Update the stored max so key handlers can cap increments correctly.
+    app.set_details_max_scroll(max_scroll);
     log::debug!(
       "details Paragraph render ({} physical lines): {}ms",
       physical_lines,

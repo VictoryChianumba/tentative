@@ -117,11 +117,17 @@ pub fn parse_secure_command(cmd: &str) -> Result<SecureCommand, String> {
   })
 }
 
-// Execute a validated command with timeout
+// Execute a validated command with timeout.
+//
+// Spawns a dedicated thread that does the blocking wait, then uses
+// `recv_timeout` to implement the deadline without polling.
 pub fn execute_secure_command_with_timeout(
   secure_cmd: SecureCommand,
   timeout: Duration,
 ) -> Result<CommandOutput, String> {
+  use std::io::Read;
+  use std::sync::mpsc;
+
   let mut child = Command::new(&secure_cmd.program)
     .args(&secure_cmd.args)
     .stdout(Stdio::piped())
@@ -131,54 +137,37 @@ pub fn execute_secure_command_with_timeout(
       format!("Failed to execute command '{}': {}", secure_cmd.program, e)
     })?;
 
-  // Wait for the command with timeout
-  match child.wait_timeout(timeout) {
-    Ok(Some(status)) => {
-      // Command completed within timeout
-      let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to read output: {e}"))?;
+  // Take ownership of the stdio handles before handing off the child.
+  let mut stdout_handle = child.stdout.take();
+  let mut stderr_handle = child.stderr.take();
 
+  let (tx, rx) = mpsc::channel::<std::io::Result<std::process::ExitStatus>>();
+  std::thread::spawn(move || {
+    let _ = tx.send(child.wait());
+  });
+
+  match rx.recv_timeout(timeout) {
+    Ok(Ok(status)) => {
+      let mut stdout_bytes = Vec::new();
+      let mut stderr_bytes = Vec::new();
+      if let Some(ref mut h) = stdout_handle {
+        let _ = h.read_to_end(&mut stdout_bytes);
+      }
+      if let Some(ref mut h) = stderr_handle {
+        let _ = h.read_to_end(&mut stderr_bytes);
+      }
       Ok(CommandOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
         status,
       })
     }
-    Ok(None) => {
-      // Timeout occurred, kill the process
-      let _ = child.kill();
-      Err("Command timed out after 30 seconds".to_string())
+    Ok(Err(e)) => Err(format!("Failed to wait for command: {e}")),
+    Err(mpsc::RecvTimeoutError::Timeout) => {
+      Err(format!("Command timed out after {} seconds", timeout.as_secs()))
     }
-    Err(e) => Err(format!("Failed to wait for command: {e}")),
-  }
-}
-
-// Extension trait for waiting with timeout
-trait WaitTimeout {
-  fn wait_timeout(
-    &mut self,
-    dur: Duration,
-  ) -> std::io::Result<Option<std::process::ExitStatus>>;
-}
-
-impl WaitTimeout for std::process::Child {
-  fn wait_timeout(
-    &mut self,
-    dur: Duration,
-  ) -> std::io::Result<Option<std::process::ExitStatus>> {
-    let start = std::time::Instant::now();
-
-    loop {
-      match self.try_wait()? {
-        Some(status) => return Ok(Some(status)),
-        None => {
-          if start.elapsed() >= dur {
-            return Ok(None);
-          }
-          std::thread::sleep(Duration::from_millis(100));
-        }
-      }
+    Err(mpsc::RecvTimeoutError::Disconnected) => {
+      Err("Command wait thread disconnected unexpectedly".to_string())
     }
   }
 }

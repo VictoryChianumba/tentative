@@ -78,6 +78,10 @@ pub fn parse_bool_env_var(var_name: &str) -> Option<bool> {
   std::env::var(var_name).ok().map(|val| val.to_lowercase() == "true")
 }
 
+pub fn parse_bool_env_var_from_str(val: &str) -> Option<bool> {
+  Some(val.to_lowercase() == "true")
+}
+
 /// Safe mutex lock acquisition with error mapping
 #[allow(dead_code)]
 pub fn safe_mutex_lock<T>(

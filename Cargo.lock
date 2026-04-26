@@ -3878,6 +3878,7 @@ name = "trench"
 version = "0.1.19"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "chat",
  "chrono",
  "cli-text-reader",

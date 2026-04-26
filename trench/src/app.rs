@@ -235,6 +235,7 @@ pub struct App {
   pub notification: Option<String>,
   pub notification_item_id: Option<String>,
   pub details_scroll: usize,
+  pub details_max_scroll: usize,
   /// URL of the item that was selected when details_scroll was last set.
   /// Used to reset scroll when the user moves to a different item.
   pub details_last_item_url: Option<String>,
@@ -306,7 +307,7 @@ impl App {
   pub fn new() -> Self {
     Self {
       should_quit: false,
-      items: mock_items(),
+      items: Vec::new(),
       selected_index: 0,
       list_offset: 0,
       discovery_items: crate::store::discovery_cache::load(),
@@ -335,6 +336,7 @@ impl App {
       notification: None,
       notification_item_id: None,
       details_scroll: 0,
+      details_max_scroll: usize::MAX,
       details_last_item_url: None,
       config: Config::default(),
       settings_field: 0,
@@ -604,7 +606,18 @@ impl App {
   }
 
   pub fn details_scroll_down(&mut self) {
-    self.details_scroll += 1;
+    self.details_scroll =
+      self.details_scroll.saturating_add(1).min(self.details_max_scroll);
+  }
+
+  /// Called by the renderer each frame with the computed max scroll for the
+  /// details pane. Keeps `details_scroll` bounded without the renderer needing
+  /// to mutate scroll state itself.
+  pub fn set_details_max_scroll(&mut self, max: usize) {
+    self.details_max_scroll = max;
+    if self.details_scroll > max {
+      self.details_scroll = max;
+    }
   }
 
   pub fn details_scroll_up(&mut self) {
@@ -1306,23 +1319,6 @@ fn toggle_set<T: Eq + std::hash::Hash>(set: &mut HashSet<T>, value: T) {
   }
 }
 
-/// Extract an arXiv ID from known URL patterns, or return `None`.
-fn arxiv_id_from_url(url: &str) -> Option<String> {
-  for prefix in &["arxiv.org/abs/", "arxiv.org/pdf/", "huggingface.co/papers/"]
-  {
-    if let Some(pos) = url.find(prefix) {
-      let rest = &url[pos + prefix.len()..];
-      let id: String = rest
-        .chars()
-        .take_while(|&c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-        .collect();
-      if !id.is_empty() {
-        return Some(id);
-      }
-    }
-  }
-  None
-}
 
 fn save_discovery_items(_items: &[FeedItem]) {
   crate::store::discovery_cache::save(_items);
@@ -1387,10 +1383,7 @@ fn format_discovery_plan_message(plan: &DiscoveryPlan) -> String {
   lines.join("\n")
 }
 
-// ---------------------------------------------------------------------------
-// Mock data
-// ---------------------------------------------------------------------------
-
+#[cfg(test)]
 fn mock_items() -> Vec<FeedItem> {
   vec![
     FeedItem {
@@ -1729,7 +1722,6 @@ fn mock_items() -> Vec<FeedItem> {
   ]
 }
 
-// ---------------------------------------------------------------------------
 fn classify_repo_file_kind(name: &str, content: &str) -> RepoFileKind {
   let lower = name.to_ascii_lowercase();
   if lower.ends_with(".md")

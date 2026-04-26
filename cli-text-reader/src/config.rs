@@ -55,38 +55,74 @@ pub fn load_config() -> AppConfig {
   config
 }
 
+/// Parse the .env file directly into key=value pairs **without** mutating the
+/// process environment. Used by `save_config` to read existing values for
+/// merge without the `dotenvy` side-effect.
+fn read_raw_config() -> std::collections::HashMap<String, String> {
+  let path = match get_config_env_path() {
+    Ok(p) => p,
+    Err(_) => return Default::default(),
+  };
+  let text = match fs::read_to_string(&path) {
+    Ok(t) => t,
+    Err(_) => return Default::default(),
+  };
+  text.lines()
+    .filter_map(|line| {
+      let line = line.trim();
+      if line.starts_with('#') || !line.contains('=') {
+        return None;
+      }
+      let mut parts = line.splitn(2, '=');
+      let key = parts.next()?.trim().to_string();
+      let val = parts.next().unwrap_or("").trim().to_string();
+      Some((key, val))
+    })
+    .collect()
+}
+
 pub fn save_config(
   config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
   let config_path = get_config_env_path()?;
 
-  let existing_config = load_config();
+  // Read existing values directly from the file — do NOT call load_config(),
+  // which would call dotenvy::from_path() and mutate the process environment.
+  let existing = read_raw_config();
+  let existing_bool = |key: &str, default: bool| -> bool {
+    existing
+      .get(key)
+      .and_then(|v| crate::utils::parse_bool_env_var_from_str(v))
+      .unwrap_or(default)
+  };
+  let existing_str = |key: &str| -> String {
+    existing.get(key).cloned().unwrap_or_default()
+  };
+  let existing_f32 = |key: &str, default: f32| -> f32 {
+    existing.get(key).and_then(|v| v.parse().ok()).unwrap_or(default)
+  };
 
   let enable_tutorial =
-    config.enable_tutorial.or(existing_config.enable_tutorial).unwrap_or(true);
+    config.enable_tutorial.unwrap_or_else(|| existing_bool("ENABLE_TUTORIAL", true));
   let enable_line_highlighter = config
     .enable_line_highlighter
-    .or(existing_config.enable_line_highlighter)
-    .unwrap_or(true);
+    .unwrap_or_else(|| existing_bool("ENABLE_LINE_HIGHLIGHTER", true));
   let show_cursor =
-    config.show_cursor.or(existing_config.show_cursor).unwrap_or(true);
+    config.show_cursor.unwrap_or_else(|| existing_bool("SHOW_CURSOR", true));
   let show_progress =
-    config.show_progress.or(existing_config.show_progress).unwrap_or(true);
-  let tutorial_shown =
-    config.tutorial_shown.or(existing_config.tutorial_shown).unwrap_or(false);
-
+    config.show_progress.unwrap_or_else(|| existing_bool("SHOW_PROGRESS", true));
+  let tutorial_shown = config
+    .tutorial_shown
+    .unwrap_or_else(|| existing_bool("TUTORIAL_SHOWN", false));
   let elevenlabs_api_key = if config.elevenlabs_api_key.is_empty() {
-    existing_config.elevenlabs_api_key.clone()
+    existing_str("ELEVENLABS_API_KEY")
   } else {
     config.elevenlabs_api_key.clone()
   };
-  let voice_id = if config.voice_id.is_empty() {
-    existing_config.voice_id.clone()
-  } else {
-    config.voice_id.clone()
-  };
+  let voice_id =
+    if config.voice_id.is_empty() { existing_str("VOICE_ID") } else { config.voice_id.clone() };
   let playback_speed = if config.playback_speed == 0.0 {
-    existing_config.playback_speed
+    existing_f32("PLAYBACK_SPEED", 1.0)
   } else {
     config.playback_speed
   };

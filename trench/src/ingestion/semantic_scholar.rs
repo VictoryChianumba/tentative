@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::models::FeedItem;
+use crate::models::{FeedItem, arxiv_id_from_url};
 use crate::store::enrichment_cache::{
   EnrichmentEntry, is_stale, save, today_str,
 };
@@ -202,20 +202,3 @@ fn fetch_entry(
   })
 }
 
-/// Extract an arXiv ID from known URL patterns.
-pub fn arxiv_id_from_url(url: &str) -> Option<String> {
-  for prefix in &["arxiv.org/abs/", "arxiv.org/pdf/", "huggingface.co/papers/"]
-  {
-    if let Some(pos) = url.find(prefix) {
-      let rest = &url[pos + prefix.len()..];
-      let id: String = rest
-        .chars()
-        .take_while(|&c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-        .collect();
-      if !id.is_empty() {
-        return Some(id);
-      }
-    }
-  }
-  None
-}
