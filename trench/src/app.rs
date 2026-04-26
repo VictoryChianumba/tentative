@@ -144,14 +144,17 @@ pub enum SourcesDetectState {
 }
 
 /// Identifies a pane in the pane registry.
+/// Discriminants are array indices — must stay contiguous from 0..PANE_COUNT.
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum PaneId {
-  Feed,
-  Reader,
-  Notes,
-  Details,
-  Chat,
+  Feed = 0,
+  Reader = 1,
+  Notes = 2,
+  Details = 3,
+  Chat = 4,
 }
+
+const PANE_COUNT: usize = 5;
 
 /// Tracks a pane's current screen position and open state.
 #[derive(Clone)]
@@ -302,7 +305,7 @@ pub struct App {
   pub leader_activated_at: Option<Instant>,
   pub leader_timeout_ms: u64,
   pub focused_pane: PaneId,
-  pub panes: Vec<PaneInfo>,
+  pub panes: [PaneInfo; PANE_COUNT],
 
   // Help overlay
   pub help_active: bool,
@@ -402,7 +405,7 @@ impl App {
       help_section: 0,
       help_scroll: 0,
       visible_cache: RefCell::new(None),
-      panes: vec![
+      panes: [
         PaneInfo::new(PaneId::Feed),
         PaneInfo::new(PaneId::Reader),
         PaneInfo::new(PaneId::Notes),
@@ -414,6 +417,14 @@ impl App {
 
   // ── Pane registry ──────────────────────────────────────────────────────────
 
+  pub fn pane(&self, id: PaneId) -> &PaneInfo {
+    &self.panes[id as usize]
+  }
+
+  pub fn pane_mut(&mut self, id: PaneId) -> &mut PaneInfo {
+    &mut self.panes[id as usize]
+  }
+
   /// Called from layout every frame with the computed screen rects.
   /// Pass `None` for a pane that is not currently rendered.
   pub fn update_pane_rects(
@@ -424,7 +435,7 @@ impl App {
     details: Option<Rect>,
     chat: Option<Rect>,
   ) {
-    let updates: [(PaneId, Option<Rect>); 5] = [
+    let updates: [(PaneId, Option<Rect>); PANE_COUNT] = [
       (PaneId::Feed, feed),
       (PaneId::Reader, reader),
       (PaneId::Notes, notes),
@@ -432,11 +443,10 @@ impl App {
       (PaneId::Chat, chat),
     ];
     for (id, opt) in updates {
-      if let Some(info) = self.panes.iter_mut().find(|p| p.id == id) {
-        info.is_open = opt.is_some();
-        if let Some(r) = opt {
-          info.rect = r;
-        }
+      let info = self.pane_mut(id);
+      info.is_open = opt.is_some();
+      if let Some(r) = opt {
+        info.rect = r;
       }
     }
   }
@@ -444,8 +454,10 @@ impl App {
   /// Returns the `PaneId` of the nearest open pane in the given direction,
   /// using center-to-center Euclidean distance among directional candidates.
   pub fn find_pane_in_direction(&self, dir: NavDirection) -> Option<PaneId> {
-    let current =
-      self.panes.iter().find(|p| p.id == self.focused_pane && p.is_open)?;
+    let current = self.pane(self.focused_pane);
+    if !current.is_open {
+      return None;
+    }
     let cx = current.rect.x as i32 + current.rect.width as i32 / 2;
     let cy = current.rect.y as i32 + current.rect.height as i32 / 2;
 
@@ -1129,7 +1141,7 @@ impl App {
     for msg in messages {
       match msg {
         DiscoveryMessage::PlanReady(plan) => {
-          let checklist = format_discovery_plan_message(&plan);
+          let checklist = crate::discovery::format_plan_message(&plan);
           self.discovery_plan = Some(plan);
           self.push_chat_assistant_message(checklist);
         }
@@ -1369,68 +1381,13 @@ fn save_discovery_items(_items: &[FeedItem]) {
   crate::store::discovery_cache::save(_items);
 }
 
-fn format_discovery_plan_message(plan: &DiscoveryPlan) -> String {
-  let cats = if plan.arxiv_categories.is_empty() {
-    "none".to_string()
-  } else {
-    plan.arxiv_categories.join(" · ")
-  };
-  let terms = if plan.search_terms.is_empty() {
-    "none".to_string()
-  } else {
-    plan.search_terms.join(" · ")
-  };
-
-  let mut lines = vec![
-    format!("Discovery: \"{}\"", plan.topic),
-    String::new(),
-    format!("arXiv categories:  {cats}"),
-    format!("Search terms:      {terms}"),
-    format!("Papers targeted:   {} specific IDs", plan.paper_ids.len()),
-  ];
-
-  lines.push(String::new());
-  lines.push("Suggested sources:".to_string());
-  if plan.arxiv_categories.is_empty()
-    && plan.rss_urls.is_empty()
-    && plan.github_sources.is_empty()
-    && plan.huggingface_sources.is_empty()
-  {
-    lines.push("  none".to_string());
-  }
-  for cat in &plan.arxiv_categories {
-    lines.push(format!("  /add {cat}"));
-  }
-  for feed in &plan.rss_urls {
-    if crate::discovery::ai_query::is_http_url(&feed.url) {
-      lines.push(format!("  /add-feed {}", feed.url));
-    }
-  }
-  for source in &plan.github_sources {
-    if crate::discovery::ai_query::is_http_url(&source.url) {
-      lines.push(format!("  [ ] GitHub {} {}", source.kind, source.url));
-    }
-  }
-  for source in &plan.huggingface_sources {
-    if crate::discovery::ai_query::is_http_url(&source.url) {
-      lines.push(format!("  [ ] HuggingFace {} {}", source.kind, source.url));
-    }
-  }
-
-  lines.extend([
-    String::new(),
-    "To add sources permanently:".to_string(),
-    "  /add cs.LG".to_string(),
-    "  /add-feed URL".to_string(),
-    "  /clear discoveries".to_string(),
-  ]);
-
-  lines.join("\n")
-}
-
 #[cfg(test)]
-fn mock_items() -> Vec<FeedItem> {
-  vec![
+mod tests {
+  use super::*;
+
+  #[allow(dead_code)]
+  fn mock_items() -> Vec<FeedItem> {
+    vec![
     FeedItem {
       id: "1".into(),
       title: "Attention Is All You Need: Revisited".into(),
@@ -1764,7 +1721,8 @@ fn mock_items() -> Vec<FeedItem> {
       full_content: None,
       source_name: String::new(),
     },
-  ]
+    ]
+  }
 }
 
 fn classify_repo_file_kind(name: &str, content: &str) -> RepoFileKind {
