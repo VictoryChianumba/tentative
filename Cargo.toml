@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+
+members = [
+  "cli-pdf-to-text",
+  "cli-epub-to-text",
+  "cli-justify",
+  "cli-text-reader",
+  "redirect-stderr",
+  "hygg-shared",
+  "hygg",
+
+  # Internal
+  # "examples",
+]
+
+[workspace.package]
+version = "0.1.19"
+rust-version = "1.88"
+edition = "2024"
+authors = ["kruseio"]
+license = "AGPL-3.0"
+readme = "README.md"
+repository = "https://github.com/kruseio/hygg"
+keywords = ["pdf", "cli", "parser", "terminal", "utility"]
+categories = [
+  "command-line-utilities",
+  "parser-implementations",
+  "text-processing",
+]
+
+[workspace.lints.rust]
+unused_parens = "allow"
+unused_imports = "allow"
+
+[workspace.lints.clippy]
+needless_return = "allow"
+implicit_saturating_sub = "allow"
+single_component_path_imports = "allow"
