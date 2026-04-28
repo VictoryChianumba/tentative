@@ -164,9 +164,32 @@ Single `draw(frame, app)` entry point. Feed view: tab bar → search row → ite
 - [ ] Floating hygg reader popup — open selected paper in a centered overlay (Ldr+Enter or dedicated key) without leaving the feed view; dismissible with Esc
 - [ ] Secondary split view — toggle a persistent hygg pane alongside the feed list (Ldr+v or similar); user can switch focus between feed and reader pane independently; reader pane retains scroll position when focus returns
 
+## Reader pane tabs
+- [ ] Tabbed reader panes: open multiple papers and switch between them (like browser tabs)
+- [ ] Tab bar across the top of the reader area showing open paper titles (truncated)
+- [ ] Ldr+t (or similar) to open a new reader tab from the feed list; Ldr+w to close current tab
+- [ ] Switch tabs with Ldr+[ / Ldr+] or number keys (Ldr+1, Ldr+2 …)
+- [ ] Side-by-side mode: split the reader area vertically to show two papers simultaneously (Ldr+s or similar)
+- [ ] In side-by-side mode, each pane has its own scroll position and tab stack
+- [ ] Tab state persists across sessions (reopen app → tabs restored)
+
+## Dashboard / Home view
+- [ ] Add a home/dashboard screen as the default landing view (before or alongside the feed)
+- [ ] Show active AI model in use
+- [ ] Show last read paper (title, source, position) with quick-resume action
+- [ ] Show current research topic / focus area (derived from recent feed activity or manually set)
+- [ ] Dashboard is navigable and updates as you use the app
+- [ ] Design question: is this a separate tab/view, or an overlay on the feed list?
+
 ## Notes
 - [ ] Notes accessible from reader mode via Ldr+n
-- [ ] Notes panel opens in right pane alongside reader
+- [ ] Notes panel opens alongside reader — placement TBD:
+  - Single paper open: notes in right pane (60/40 split)
+  - Two papers side by side: notes as a bottom panel or a third column?
+  - Notes should stay anchored to the paper they were opened from
+- [ ] Tabbed notes: multiple note documents open at once, tab bar across the top of the notes pane
+- [ ] Each note tab is associated with a paper (keyed by URL/arXiv ID) so reopening a paper restores its notes
+- [ ] Notes persist to `~/.config/trench/notes/` keyed by paper ID
 
 ## Help screen
 - [ ] Design and implement full help screen

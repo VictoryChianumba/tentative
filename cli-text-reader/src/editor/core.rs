@@ -149,7 +149,13 @@ impl Editor {
       // Settings popup
       show_settings: false,
       settings_cursor: 0,
-      settings_fields: [String::new(), String::new(), String::new()],
+      settings_fields: [
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+      ],
       settings_editing: false,
       settings_saved_until: None,
     }

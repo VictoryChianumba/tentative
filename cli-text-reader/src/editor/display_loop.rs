@@ -133,6 +133,11 @@ impl Editor {
             )?;
           }
 
+          // Render settings popup if open (drawn last so it overlays everything)
+          if self.show_settings {
+            self.draw_settings_popup_buffered(&mut render_buffer)?;
+          }
+
           // Position cursor and show it at the final position
           self.position_cursor_buffered(&mut render_buffer, center_offset)?;
 

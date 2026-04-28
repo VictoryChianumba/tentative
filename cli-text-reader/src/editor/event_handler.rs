@@ -16,6 +16,13 @@ impl Editor {
       key_event, self.active_buffer, active_mode, self.view_mode
     ));
 
+    // Settings popup intercepts all keys when open
+    if self.show_settings {
+      return self
+        .handle_settings_key(key_event)
+        .map(|opt| opt == Some(true));
+    }
+
     // Route to mode-specific handlers first
     let result = match active_mode {
       EditorMode::Normal => self.handle_normal_mode_event(key_event),

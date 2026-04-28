@@ -7,9 +7,16 @@ use ratatui::{
 use crate::editor::Editor;
 
 const POPUP_W: u16 = 60;
-const POPUP_H: u16 = 14;
-const FIELD_NAMES: [&str; 3] =
-  ["ELEVENLABS_API_KEY", "VOICE_ID", "PLAYBACK_SPEED"];
+const POPUP_H: u16 = 20;
+const FIELD_NAMES: [&str; 5] =
+  ["ELEVENLABS_API_KEY", "VOICE_ID", "PLAYBACK_SPEED", "TTS_PROVIDER", "SAY_VOICE"];
+const FIELD_HINTS: [&str; 5] = [
+  "API key from elevenlabs.io",
+  "voice ID from your ElevenLabs dashboard",
+  "0.5 – 2.0  (applied on save)",
+  "h/l or Enter to cycle: auto → elevenlabs → say → piper",
+  "run  say -v ?  in a terminal to list all voices",
+];
 
 pub fn draw_settings_popup(frame: &mut Frame, editor: &Editor, area: Rect) {
   let left = area.x + area.width.saturating_sub(POPUP_W) / 2;
@@ -25,13 +32,11 @@ pub fn draw_settings_popup(frame: &mut Frame, editor: &Editor, area: Rect) {
   for (i, name) in FIELD_NAMES.iter().enumerate() {
     let label_row = top + 1 + (i as u16) * 3 + 1;
     let value_row = label_row + 1;
+    let hint_row = value_row + 1;
     let selected = i == editor.settings_cursor;
 
-    let label_style = if selected {
-      Style::default().fg(Color::Yellow)
-    } else {
-      Style::default()
-    };
+    let label_style =
+      if selected { Style::default().fg(Color::Yellow) } else { Style::default() };
     let label =
       if selected { format!("▸ {name}") } else { format!("  {name}") };
     frame.render_widget(
@@ -40,30 +45,46 @@ pub fn draw_settings_popup(frame: &mut Frame, editor: &Editor, area: Rect) {
     );
 
     let raw = &editor.settings_fields[i];
-    let display: String = if i == 0 && !raw.is_empty() {
-      "*".repeat(raw.len())
+    let (value_text, value_style) = if i == 3 {
+      let label = if raw.is_empty() { "auto" } else { raw.as_str() };
+      if selected {
+        (format!("◀  {label}  ▶"), Style::default().fg(Color::Cyan))
+      } else {
+        (format!("   {label}   "), Style::default())
+      }
     } else {
-      raw.clone()
-    };
-    let display = if display.len() > max_val {
-      format!("{}…", &display[..max_val.saturating_sub(1)])
-    } else {
-      display
-    };
-    let (value_text, value_style) = if selected && editor.settings_editing {
-      (format!("{display}_"), Style::default().fg(Color::Cyan))
-    } else {
-      (display, Style::default())
+      let display: String =
+        if i == 0 && !raw.is_empty() { "*".repeat(raw.len()) } else { raw.clone() };
+      let display = if display.len() > max_val {
+        format!("{}…", &display[..max_val.saturating_sub(1)])
+      } else {
+        display
+      };
+      if selected && editor.settings_editing {
+        (format!("{display}_"), Style::default().fg(Color::Cyan))
+      } else {
+        (display, Style::default())
+      }
     };
     frame.render_widget(
       Paragraph::new(value_text).style(value_style),
       Rect { x: left + 4, y: value_row, width: POPUP_W - 8, height: 1 },
     );
+
+    if selected {
+      frame.render_widget(
+        Paragraph::new(FIELD_HINTS[i])
+          .style(Style::default().fg(Color::DarkGray)),
+        Rect { x: left + 4, y: hint_row, width: POPUP_W - 8, height: 1 },
+      );
+    }
   }
 
   let hint_row = top + POPUP_H - 3;
   let hint = if editor.settings_editing {
     "Type to edit  Enter/Esc: confirm"
+  } else if editor.settings_cursor == 3 {
+    "h/l: cycle  j/k: move  s: save  Esc: close"
   } else {
     "j/k: move  Enter: edit  s: save  Esc: close"
   };

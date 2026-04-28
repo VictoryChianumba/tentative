@@ -153,6 +153,12 @@ impl Editor {
     }
 
     match cmd.as_str() {
+      "settings" | "config" | "set" => {
+        self.set_active_mode(super::core::EditorMode::Normal);
+        self.editor_state.command_buffer.clear();
+        self.open_settings_popup();
+        return Ok(false);
+      }
       "p" => self.handle_progress_command(),
       "cursor" | "c" => self.handle_cursor_command(),
       "help" | "commands" => self.handle_help_command(),

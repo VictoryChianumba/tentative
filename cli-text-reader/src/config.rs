@@ -143,9 +143,19 @@ pub fn save_config(
   } else {
     config.playback_speed
   };
+  let tts_provider = if config.tts_provider.is_empty() {
+    existing_str("TTS_PROVIDER")
+  } else {
+    config.tts_provider.clone()
+  };
+  let say_voice = if config.say_voice.is_empty() {
+    existing_str("SAY_VOICE")
+  } else {
+    config.say_voice.clone()
+  };
 
   let content = format!(
-    "ENABLE_TUTORIAL={enable_tutorial}\nENABLE_LINE_HIGHLIGHTER={enable_line_highlighter}\nSHOW_CURSOR={show_cursor}\nSHOW_PROGRESS={show_progress}\nTUTORIAL_SHOWN={tutorial_shown}\nELEVENLABS_API_KEY={elevenlabs_api_key}\nVOICE_ID={voice_id}\nPLAYBACK_SPEED={playback_speed:.1}\n"
+    "ENABLE_TUTORIAL={enable_tutorial}\nENABLE_LINE_HIGHLIGHTER={enable_line_highlighter}\nSHOW_CURSOR={show_cursor}\nSHOW_PROGRESS={show_progress}\nTUTORIAL_SHOWN={tutorial_shown}\nELEVENLABS_API_KEY={elevenlabs_api_key}\nVOICE_ID={voice_id}\nPLAYBACK_SPEED={playback_speed:.1}\nTTS_PROVIDER={tts_provider}\nSAY_VOICE={say_voice}\n"
   );
 
   fs::write(&config_path, content)?;

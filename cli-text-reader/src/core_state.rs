@@ -91,7 +91,7 @@ pub struct Editor {
   // Settings popup state
   pub show_settings: bool,
   pub settings_cursor: usize,
-  pub settings_fields: [String; 3],
+  pub settings_fields: [String; 5],
   pub settings_editing: bool,
   pub settings_saved_until: Option<Instant>,
 }

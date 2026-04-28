@@ -7,10 +7,26 @@ use crossterm::{
 use super::core::Editor;
 use crate::config::{AppConfig, load_config, save_config};
 
-const FIELD_NAMES: [&str; 3] =
-  ["ELEVENLABS_API_KEY", "VOICE_ID", "PLAYBACK_SPEED"];
+const FIELD_NAMES: [&str; 5] =
+  ["ELEVENLABS_API_KEY", "VOICE_ID", "PLAYBACK_SPEED", "TTS_PROVIDER", "SAY_VOICE"];
+const FIELD_HINTS: [&str; 5] = [
+  "API key from elevenlabs.io",
+  "voice ID from your ElevenLabs dashboard",
+  "0.5 – 2.0  (applied on save)",
+  "h/l or Enter to cycle: auto → elevenlabs → say → piper",
+  "run  say -v ?  in a terminal to list all voices",
+];
+const TTS_OPTIONS: [&str; 4] = ["", "elevenlabs", "say", "piper"];
 const POPUP_W: u16 = 60;
-const POPUP_H: u16 = 14;
+const POPUP_H: u16 = 20;
+
+fn cycle_tts(field: &mut String, dir: i32) {
+  let cur =
+    TTS_OPTIONS.iter().position(|&o| o == field.as_str()).unwrap_or(0);
+  let next =
+    (cur as i32 + dir).rem_euclid(TTS_OPTIONS.len() as i32) as usize;
+  *field = TTS_OPTIONS[next].to_string();
+}
 
 impl Editor {
   /// Open the settings popup, loading current values from config.
@@ -19,6 +35,8 @@ impl Editor {
     self.settings_fields[0] = config.elevenlabs_api_key.clone();
     self.settings_fields[1] = config.voice_id.clone();
     self.settings_fields[2] = format!("{:.1}", config.playback_speed);
+    self.settings_fields[3] = config.tts_provider.clone();
+    self.settings_fields[4] = config.say_voice.clone();
     self.settings_cursor = 0;
     self.settings_editing = false;
     self.show_settings = true;
@@ -43,6 +61,8 @@ impl Editor {
       elevenlabs_api_key: self.settings_fields[0].clone(),
       voice_id: self.settings_fields[1].clone(),
       playback_speed: speed,
+      tts_provider: self.settings_fields[3].clone(),
+      say_voice: self.settings_fields[4].clone(),
       ..Default::default()
     };
     let _ = save_config(&config);
@@ -100,11 +120,22 @@ impl Editor {
         self.close_settings_popup();
       }
       KeyCode::Char('j') | KeyCode::Down => {
-        self.settings_cursor = (self.settings_cursor + 1).min(2);
+        self.settings_cursor =
+          (self.settings_cursor + 1).min(FIELD_NAMES.len() - 1);
         self.mark_dirty();
       }
       KeyCode::Char('k') | KeyCode::Up => {
         self.settings_cursor = self.settings_cursor.saturating_sub(1);
+        self.mark_dirty();
+      }
+      KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right
+        if self.settings_cursor == 3 =>
+      {
+        cycle_tts(&mut self.settings_fields[3], 1);
+        self.mark_dirty();
+      }
+      KeyCode::Char('h') | KeyCode::Left if self.settings_cursor == 3 => {
+        cycle_tts(&mut self.settings_fields[3], -1);
         self.mark_dirty();
       }
       KeyCode::Enter => {
@@ -156,20 +187,17 @@ impl Editor {
     )))?;
 
     // ── field labels + values ───────────────────────────────────────────────
-    // Layout:
-    //   row 1: blank
-    //   rows 2,3,4 → field 0  (label row, value row, blank row)
-    //   rows 5,6,7 → field 1
-    //   rows 8,9,10 → field 2
-    //   row 11: hint
-    //   row 12: hint2 / saved msg
+    // Layout per field: label row / value row / hint row (3 rows each)
+    // Hint row is blank when not selected; shows dimmed hint when selected.
 
     for (i, name) in FIELD_NAMES.iter().enumerate() {
-      let label_row = top + 1 + (i as u16) * 3 + 1; // rows 2, 5, 8
+      let label_row = top + 1 + (i as u16) * 3 + 1;
       let value_row = label_row + 1;
+      let hint_row = value_row + 1;
+
+      let selected = i == self.settings_cursor;
 
       // Label
-      let selected = i == self.settings_cursor;
       buf.queue(MoveTo(left + 2, label_row))?;
       if selected {
         buf.queue(SetForegroundColor(Color::Yellow))?;
@@ -179,38 +207,55 @@ impl Editor {
         buf.queue(Print(format!("  {name}")))?;
       }
 
-      // Value (mask API key)
+      // Value
       let raw = &self.settings_fields[i];
-      let display: String = if i == 0 && !raw.is_empty() {
-        "*".repeat(raw.len())
-      } else {
-        raw.clone()
-      };
-
-      // Truncate to fit inside popup
-      let max_val = (inner_w).saturating_sub(4);
-      let display = if display.len() > max_val {
-        format!("{}…", &display[..max_val.saturating_sub(1)])
-      } else {
-        display
-      };
-
       buf.queue(MoveTo(left + 4, value_row))?;
-      if selected && self.settings_editing {
-        buf.queue(SetForegroundColor(Color::Cyan))?;
-        buf.queue(Print(format!("{display}_")))?;
-        buf.queue(ResetColor)?;
+      if i == 3 {
+        // Cycle-select: show arrows when selected
+        let label = if raw.is_empty() { "auto" } else { raw.as_str() };
+        if selected {
+          buf.queue(SetForegroundColor(Color::Cyan))?;
+          buf.queue(Print(format!("◀  {label}  ▶")))?;
+          buf.queue(ResetColor)?;
+        } else {
+          buf.queue(Print(format!("   {label}   ")))?;
+        }
       } else {
-        buf.queue(Print(display))?;
+        // Text-edit field
+        let display: String =
+          if i == 0 && !raw.is_empty() { "*".repeat(raw.len()) } else { raw.clone() };
+        let max_val = inner_w.saturating_sub(4);
+        let display = if display.len() > max_val {
+          format!("{}…", &display[..max_val.saturating_sub(1)])
+        } else {
+          display
+        };
+        if selected && self.settings_editing {
+          buf.queue(SetForegroundColor(Color::Cyan))?;
+          buf.queue(Print(format!("{display}_")))?;
+          buf.queue(ResetColor)?;
+        } else {
+          buf.queue(Print(&display))?;
+        }
+      }
+
+      // Per-field hint (shown in blank row when selected)
+      if selected {
+        buf.queue(MoveTo(left + 4, hint_row))?;
+        buf.queue(SetForegroundColor(Color::DarkGrey))?;
+        buf.queue(Print(FIELD_HINTS[i]))?;
+        buf.queue(ResetColor)?;
       }
     }
 
-    // ── hint row ────────────────────────────────────────────────────────────
+    // ── footer hint ──────────────────────────────────────────────────────────
     let hint_row = top + POPUP_H - 3;
     buf.queue(MoveTo(left + 2, hint_row))?;
     buf.queue(SetForegroundColor(Color::DarkGrey))?;
     if self.settings_editing {
       buf.queue(Print("Type to edit  Enter/Esc: confirm"))?;
+    } else if self.settings_cursor == 3 {
+      buf.queue(Print("h/l: cycle  j/k: move  s: save  Esc: close"))?;
     } else {
       buf.queue(Print("j/k: move  Enter: edit  s: save  Esc: close"))?;
     }
