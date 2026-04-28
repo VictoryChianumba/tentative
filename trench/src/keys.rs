@@ -1052,6 +1052,45 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
       _ => {}
     }
   } else if app.focused_pane == PaneId::Feed {
+    // In State 2 the narrow feed holds focus — use a restricted key set so
+    // main-feed bindings (Esc → quit, v → repo viewer) don't fire here.
+    if app.reader_split_active {
+      match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+          app.reader_split_active = false;
+          app.focused_pane = PaneId::Reader;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+          if kbd_scroll_ok(app) {
+            app.move_down();
+          }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+          if kbd_scroll_ok(app) {
+            app.move_up();
+          }
+        }
+        KeyCode::Enter => {
+          if !app.fulltext_loading {
+            if let Some(item) = app.selected_item().cloned() {
+              let (tx, rx) = mpsc::channel();
+              app.fulltext_rx = Some(rx);
+              app.fulltext_loading = true;
+              app.fulltext_for_secondary = false;
+              app.set_notification(format!(
+                "Fetching: {}…",
+                truncate_for_notif(&item.title, 40)
+              ));
+              app.focused_pane = PaneId::Reader;
+              spawn_fulltext_fetch(item, tx);
+            }
+          }
+        }
+        _ => {}
+      }
+      return;
+    }
+
     match key.code {
       KeyCode::Tab => {
         app.filter_focus = true;
