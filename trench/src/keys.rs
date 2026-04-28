@@ -1066,19 +1066,47 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
     // In State 2 the narrow feed holds focus — use a restricted key set so
     // main-feed bindings (Esc → quit, v → repo viewer) don't fire here.
     if app.reader_split_active {
+      // Close description popup first if open.
+      if app.narrow_feed_details_open {
+        match key.code {
+          KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
+            app.narrow_feed_details_open = false;
+          }
+          KeyCode::Char('j') | KeyCode::Down => {
+            app.details_scroll = app.details_scroll.saturating_add(1);
+          }
+          KeyCode::Char('k') | KeyCode::Up => {
+            app.details_scroll = app.details_scroll.saturating_sub(1);
+          }
+          _ => {}
+        }
+        return;
+      }
       match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {
           app.reader_split_active = false;
+          app.narrow_feed_details_open = false;
           app.focused_pane = PaneId::Reader;
+        }
+        KeyCode::Char('d') => {
+          app.narrow_feed_details_open = true;
+          app.details_scroll = 0;
+        }
+        KeyCode::Char('/') => {
+          app.search_active = true;
+          app.search_query.clear();
+          app.reset_active_feed_position();
         }
         KeyCode::Char('j') | KeyCode::Down => {
           if kbd_scroll_ok(app) {
             app.move_down();
+            app.narrow_feed_details_open = false;
           }
         }
         KeyCode::Char('k') | KeyCode::Up => {
           if kbd_scroll_ok(app) {
             app.move_up();
+            app.narrow_feed_details_open = false;
           }
         }
         KeyCode::Enter => {
@@ -1088,6 +1116,7 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
               app.fulltext_rx = Some(rx);
               app.fulltext_loading = true;
               app.fulltext_for_secondary = false;
+              app.narrow_feed_details_open = false;
               app.set_notification(format!(
                 "Fetching: {}…",
                 truncate_for_notif(&item.title, 40)

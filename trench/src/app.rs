@@ -315,6 +315,7 @@ pub struct App {
   pub reader_bottom_focused: bool,   // pane has keyboard focus
   pub reader_bottom_details: bool,   // showing details (true) or feed list (false)
   pub reader_bottom_scroll: usize,   // scroll offset for both feed and details
+  pub narrow_feed_details_open: bool, // State 2: description popup over reader
   pub reader_feed_popup_selected: usize,  // selected item in bottom feed list
 
   // Settings buffers for chat fields
@@ -437,6 +438,7 @@ impl App {
       reader_bottom_open: false,
       reader_bottom_focused: false,
       reader_bottom_details: false,
+      narrow_feed_details_open: false,
       reader_bottom_scroll: 0,
       reader_feed_popup_selected: 0,
       settings_claude_key: String::new(),

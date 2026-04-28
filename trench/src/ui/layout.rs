@@ -348,6 +348,9 @@ fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
       editor.update_layout(reader_rect);
       cli_text_reader::draw_editor(frame, reader_rect, editor);
     }
+    if app.narrow_feed_details_open {
+      draw_narrow_feed_details_popup(frame, app, reader_rect);
+    }
     return MainRowRects {
       feed: Some(feed_rect),
       reader: Some(reader_rect),
@@ -1539,6 +1542,46 @@ fn draw_reader_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     editor.update_layout(inner);
     cli_text_reader::draw_editor(frame, inner, editor);
   }
+}
+
+// ── A2 State 2: description popup over reader pane ────────────────────────
+
+fn draw_narrow_feed_details_popup(frame: &mut Frame, app: &App, area: Rect) {
+  let t = app.active_theme.theme();
+  let popup_h = (area.height * 40 / 100).max(6).min(area.height);
+  let popup_w = area.width.saturating_sub(4).max(20);
+  let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+  let popup_y = area.y + area.height.saturating_sub(popup_h);
+  let popup_rect = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+  frame.render_widget(Clear, popup_rect);
+
+  let block = Block::default()
+    .borders(Borders::ALL)
+    .border_style(Style::default().fg(t.border_active))
+    .title(Span::styled(
+      " Details · j/k: scroll  d/Esc: close ",
+      Style::default().fg(t.accent),
+    ));
+
+  let inner = block.inner(popup_rect);
+  frame.render_widget(block, popup_rect);
+
+  if inner.height == 0 {
+    return;
+  }
+
+  let items = app.items_for_tab();
+  let sel = app.active_selected_index();
+  let Some(item) = items.get(sel) else { return };
+
+  let text = format!("{}\n\n{}", item.title, item.summary_short);
+  let scroll = app.details_scroll;
+  let para = Paragraph::new(text)
+    .wrap(ratatui::widgets::Wrap { trim: false })
+    .scroll((scroll as u16, 0))
+    .style(Style::default().fg(t.text));
+  frame.render_widget(para, inner);
 }
 
 // ── A2 State 3: persistent bottom pane (feed list or details) ─────────────
