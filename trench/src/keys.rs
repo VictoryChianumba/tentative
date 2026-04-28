@@ -122,11 +122,13 @@ fn handle_reader_bottom_pane(key: KeyEvent, app: &mut App) {
         app.reader_bottom_details = false;
         app.reader_bottom_scroll = 0;
       } else {
+        app.reader_bottom_open = false;
         app.reader_bottom_focused = false;
         app.focused_pane = PaneId::Reader;
       }
     }
     KeyCode::Char('q') => {
+      app.reader_bottom_open = false;
       app.reader_bottom_focused = false;
       app.focused_pane = PaneId::Reader;
     }
