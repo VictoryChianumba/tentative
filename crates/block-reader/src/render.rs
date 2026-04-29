@@ -103,8 +103,9 @@ fn render_visual_line<'a>(
       Line::styled(text.clone(), base_style.fg(fg).add_modifier(modifier))
     }
 
-    VisualLineKind::MatrixLine { .. } => {
-      Line::styled(format!("  {}", text), base_style.fg(MATH_COLOR))
+    VisualLineKind::MatrixLine { is_first, is_last } => {
+      let prefix = if *is_first { "┌ " } else if *is_last { "└ " } else { "│ " };
+      Line::styled(format!("{}{}", prefix, text), base_style.fg(MATH_COLOR))
     }
   }
 }
