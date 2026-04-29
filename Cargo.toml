@@ -14,6 +14,8 @@ members = [
   "crates/chat",
   "crates/math-render",
   "crates/arxiv-render",
+  "crates/doc-model",
+  "crates/block-reader",
 
   # Internal
   # "examples",

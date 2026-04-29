@@ -174,7 +174,9 @@ Status markers: [x] done  [-] in progress / partial  [ ] not started
 - [ ] Tab state persists across sessions
 
 ## Dashboard / Home view
-- [ ] Add a home/dashboard screen as the default landing view
+- [x] Add a home/dashboard screen as the default landing view — shown in wider details pane until first navigation; sections: Continue Reading, Your Queue, At a Glance (counts), Recent (last 48h), footer (provider + sources)
+- [ ] Persist last_read across sessions (write to ~/.config/trench/state.json)
+- [ ] Recent research topic tracking (deferred — needs design)
 - [ ] Show active AI model in use
 - [ ] Show last read paper (title, source, position) with quick-resume action
 - [ ] Show current research topic / focus area (derived from recent feed activity or manually set)

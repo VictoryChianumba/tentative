@@ -323,10 +323,13 @@ pub struct App {
   pub settings_openai_key: String,
   pub settings_default_chat_provider: String,
 
+  // Last opened paper (shown in dashboard "Continue Reading")
+  pub last_read: Option<String>,
+  pub last_read_source: Option<String>,
+
   // Background fulltext fetch (article reader)
   pub fulltext_rx: Option<Receiver<Result<Vec<String>, String>>>,
   pub fulltext_loading: bool,
-
   // Background repo fetch (repo viewer)
   pub repo_fetch_rx: Option<Receiver<RepoFetchResult>>,
 
@@ -444,6 +447,8 @@ impl App {
       settings_claude_key: String::new(),
       settings_openai_key: String::new(),
       settings_default_chat_provider: "claude".to_string(),
+      last_read: None,
+      last_read_source: None,
       fulltext_rx: None,
       fulltext_loading: false,
       repo_fetch_rx: None,

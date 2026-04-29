@@ -107,6 +107,12 @@ fn handle_reader_bottom_pane(key: KeyEvent, app: &mut App) {
           app.fulltext_loading = true;
           app.fulltext_for_secondary =
             app.focused_reader == FocusedReader::Secondary;
+          app.last_read = Some(item.title.clone());
+          app.last_read_source = Some(if item.source_name.is_empty() {
+            item.source_platform.short_label().to_string()
+          } else {
+            item.source_name.clone()
+          });
           app.set_notification(format!(
             "Fetching: {}…",
             truncate_for_notif(&item.title, 40)
@@ -297,6 +303,12 @@ fn handle_leader(key: KeyEvent, app: &mut App) {
           let (tx, rx) = mpsc::channel();
           app.reader_popup_rx = Some(rx);
           app.fulltext_loading = true;
+          app.last_read = Some(item.title.clone());
+          app.last_read_source = Some(if item.source_name.is_empty() {
+            item.source_platform.short_label().to_string()
+          } else {
+            item.source_name.clone()
+          });
           app.set_notification(format!(
             "Fetching: {}…",
             truncate_for_notif(&item.title, 40)
@@ -333,6 +345,12 @@ fn handle_leader(key: KeyEvent, app: &mut App) {
             let (tx, rx) = mpsc::channel();
             app.fulltext_rx = Some(rx);
             app.fulltext_loading = true;
+            app.last_read = Some(item.title.clone());
+            app.last_read_source = Some(if item.source_name.is_empty() {
+              item.source_platform.short_label().to_string()
+            } else {
+              item.source_name.clone()
+            });
             app.set_notification(format!(
               "Loading: {}…",
               truncate_for_notif(&item.title, 40)
@@ -1118,6 +1136,12 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
               app.fulltext_loading = true;
               app.fulltext_for_secondary = false;
               app.narrow_feed_details_open = false;
+              app.last_read = Some(item.title.clone());
+              app.last_read_source = Some(if item.source_name.is_empty() {
+                item.source_platform.short_label().to_string()
+              } else {
+                item.source_name.clone()
+              });
               app.set_notification(format!(
                 "Fetching: {}…",
                 truncate_for_notif(&item.title, 40)
@@ -1169,16 +1193,22 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
               item.url
             );
             let t = std::time::Instant::now();
-            let (tx, rx) = mpsc::channel();
-            app.fulltext_rx = Some(rx);
             app.fulltext_loading = true;
+            app.last_read = Some(item.title.clone());
+            app.last_read_source = Some(if item.source_name.is_empty() {
+              item.source_platform.short_label().to_string()
+            } else {
+              item.source_name.clone()
+            });
             app.set_notification(format!(
               "Fetching: {}…",
               truncate_for_notif(&item.title, 40)
             ));
+            let (tx, rx) = mpsc::channel();
+            app.fulltext_rx = Some(rx);
             spawn_fulltext_fetch(item, tx);
             log::debug!(
-              "feed Enter: spawn_fulltext_fetch setup took {}µs",
+              "feed Enter: fetch setup took {}µs",
               t.elapsed().as_micros()
             );
           }

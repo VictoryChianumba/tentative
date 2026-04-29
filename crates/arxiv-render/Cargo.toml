@@ -12,6 +12,7 @@ name = "arxiv-render"
 path = "src/main.rs"
 
 [dependencies]
+doc-model = { path = "../doc-model" }
 math-render = { path = "../math-render" }
 flate2 = "1"
 tar = "0.4"

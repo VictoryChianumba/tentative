@@ -1,28 +1,48 @@
+use doc_model::Block;
 use math_render::{MathInput, render};
 use std::collections::HashMap;
 
 const WRAP_WIDTH: usize = 80;
 
-/// Convert a set of `.tex` source files into display lines with math
-/// pre-rendered as Unicode.
-pub fn to_lines(sources: Vec<(String, String)>) -> Vec<String> {
+/// Convert a set of `.tex` source files into a semantic block document.
+pub fn to_blocks(sources: Vec<(String, String)>) -> Vec<Block> {
   let file_map: HashMap<String, String> = sources.into_iter().collect();
   let root = find_root(&file_map);
   let expanded = expand_inputs(&root, &file_map, 0);
+
+  // Extract title/authors from the full source before stripping preamble.
+  let title = extract_command_arg(&expanded, "title").map(clean_inline);
+  let authors = extract_command_arg(&expanded, "author").map(clean_authors);
+
   let body = extract_body(&expanded);
-  process(&body)
+  let body_blocks = process(&body);
+
+  // Prepend title / authors so they lead the document.
+  let mut out: Vec<Block> = Vec::new();
+  out.push(Block::Blank);
+  if let Some(t) = title {
+    if !t.is_empty() {
+      out.push(Block::Header { level: 1, text: t });
+    }
+  }
+  if let Some(a) = authors {
+    if !a.is_empty() {
+      out.push(Block::Line(a));
+    }
+  }
+  out.push(Block::Blank);
+  out.extend(body_blocks);
+  out
 }
 
 // ── Root selection ────────────────────────────────────────────────────────────
 
 fn find_root(files: &HashMap<String, String>) -> String {
-  // Prefer the file with \begin{document}.
   for content in files.values() {
     if content.contains(r"\begin{document}") {
       return content.clone();
     }
   }
-  // Fallback: largest file.
   files
     .values()
     .max_by_key(|c| c.len())
@@ -34,7 +54,7 @@ fn find_root(files: &HashMap<String, String>) -> String {
 
 fn expand_inputs(content: &str, files: &HashMap<String, String>, depth: usize) -> String {
   if depth > 10 {
-    return content.to_string(); // guard against circular includes
+    return content.to_string();
   }
   let mut out = String::with_capacity(content.len());
   let mut rest = content;
@@ -44,8 +64,7 @@ fn expand_inputs(content: &str, files: &HashMap<String, String>, depth: usize) -
     if let Some(end) = rest.find('}') {
       let filename = rest[..end].trim();
       rest = &rest[end + 1..];
-      let resolved = resolve_input(filename, files);
-      if let Some(included) = resolved {
+      if let Some(included) = resolve_input(filename, files) {
         out.push_str(&expand_inputs(&included, files, depth + 1));
       }
     }
@@ -55,7 +74,6 @@ fn expand_inputs(content: &str, files: &HashMap<String, String>, depth: usize) -
 }
 
 fn resolve_input(name: &str, files: &HashMap<String, String>) -> Option<String> {
-  // Try exact name, then with .tex appended, then basename only.
   let candidates = [
     name.to_string(),
     format!("{name}.tex"),
@@ -86,28 +104,25 @@ fn extract_body(content: &str) -> String {
     .find(r"\begin{document}")
     .map(|p| p + r"\begin{document}".len())
     .unwrap_or(0);
-  let end = content
-    .rfind(r"\end{document}")
-    .unwrap_or(content.len());
+  let end = content.rfind(r"\end{document}").unwrap_or(content.len());
   content[start..end].to_string()
 }
 
 // ── Main processor ────────────────────────────────────────────────────────────
 
-fn process(body: &str) -> Vec<String> {
-  let mut out: Vec<String> = Vec::new();
+fn process(body: &str) -> Vec<Block> {
+  let mut out: Vec<Block> = Vec::new();
 
-  // Abstract block collected first so it appears at the top.
+  // Abstract block first so it appears at the top.
   if let Some(abs) = extract_env(body, "abstract") {
-    out.push(String::new());
-    out.push("── Abstract ──".to_string());
+    out.push(Block::Blank);
+    out.push(Block::Header { level: 2, text: "Abstract".to_string() });
     for line in process_prose(&abs) {
-      out.push(line);
+      out.push(Block::Line(line));
     }
-    out.push(String::new());
+    out.push(Block::Blank);
   }
 
-  // Process the body character by character using a mini state machine.
   let processed = process_body(body);
   out.extend(processed);
   out
@@ -115,16 +130,20 @@ fn process(body: &str) -> Vec<String> {
 
 // ── Body state machine ────────────────────────────────────────────────────────
 
-fn process_body(body: &str) -> Vec<String> {
-  let mut out: Vec<String> = Vec::new();
+fn process_body(body: &str) -> Vec<Block> {
+  let mut out: Vec<Block> = Vec::new();
   let mut current_line = String::new();
 
-  // Track which block environments to skip entirely.
-  let skip_envs = ["figure", "table", "lstlisting", "verbatim", "tikzpicture", "algorithm"];
-  // Track which math environments to render as display blocks.
-  let display_math_envs = ["equation", "equation*", "align", "align*", "aligned",
-                            "gather", "gather*", "multline", "multline*", "eqnarray",
-                            "eqnarray*"];
+  let skip_envs = [
+    "figure", "figure*", "table", "table*", "lstlisting", "verbatim",
+    "tikzpicture", "algorithm", "algorithmic", "wrapfigure", "subfigure",
+    "minipage", "thebibliography",
+    "tabular", "tabular*", "longtable", "tabularx", "tabulary",
+  ];
+  let display_math_envs = [
+    "equation", "equation*", "align", "align*", "aligned",
+    "gather", "gather*", "multline", "multline*", "eqnarray", "eqnarray*",
+  ];
 
   let mut i = 0usize;
   let text: Vec<char> = body.chars().collect();
@@ -147,14 +166,12 @@ fn process_body(body: &str) -> Vec<String> {
       i += 1 + consumed;
 
       match cmd.as_str() {
-        // Skip \end{...} — block ends handled inline.
         "end" => {
           let (env, skip) = read_braced_arg(&text, i);
           i += skip;
-          // If ending a skip env, push placeholder.
           if skip_envs.contains(&env.trim()) {
             flush_line(&mut current_line, &mut out);
-            out.push(format!("[{env}]"));
+            out.push(Block::Line(format!("[{env}]")));
           }
           continue;
         }
@@ -163,63 +180,62 @@ fn process_body(body: &str) -> Vec<String> {
           i += skip;
           let env = env.trim().to_string();
 
-          // Display math environments.
           if display_math_envs.iter().any(|e| *e == env.as_str()) {
             flush_line(&mut current_line, &mut out);
             let (math, adv) = read_until_end(&text, i, &env);
             i += adv;
             let rendered = render(MathInput::Latex(math.trim()));
-            for l in rendered.lines() {
-              out.push(l.to_string());
+            let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
+            if !lines.is_empty() {
+              out.push(Block::DisplayMath(lines));
             }
             continue;
           }
 
-          // Abstract handled at top — skip here.
           if env == "abstract" {
             let (_abs, adv) = read_until_end(&text, i, "abstract");
             i += adv;
             continue;
           }
 
-          // Skipped environments.
           if skip_envs.contains(&env.as_str()) {
             let (_content, adv) = read_until_end(&text, i, &env);
             i += adv;
             continue;
           }
 
-          // Everything else (itemize, enumerate, etc.) — just continue.
           continue;
         }
 
-        // Section headers.
+        // Section headers → semantic Header blocks.
         "section" => {
           let (title, skip) = read_braced_arg(&text, i);
           i += skip;
           flush_line(&mut current_line, &mut out);
-          out.push(String::new());
-          out.push(format!("══ {} ══", title.trim()));
-          out.push(String::new());
+          out.push(Block::Blank);
+          out.push(Block::Header { level: 1, text: title.trim().to_string() });
+          out.push(Block::Blank);
         }
         "subsection" => {
           let (title, skip) = read_braced_arg(&text, i);
           i += skip;
           flush_line(&mut current_line, &mut out);
-          out.push(String::new());
-          out.push(format!("── {} ──", title.trim()));
-          out.push(String::new());
+          out.push(Block::Blank);
+          out.push(Block::Header { level: 2, text: title.trim().to_string() });
+          out.push(Block::Blank);
         }
         "subsubsection" | "paragraph" => {
           let (title, skip) = read_braced_arg(&text, i);
           i += skip;
           flush_line(&mut current_line, &mut out);
-          out.push(format!("─ {} ─", title.trim()));
+          out.push(Block::Header { level: 3, text: title.trim().to_string() });
         }
 
         // Inline text commands — keep the argument, drop the command.
         "emph" | "textbf" | "textit" | "texttt" | "text" | "mathrm"
-        | "mathbf" | "mathit" | "mathcal" | "mathbb" => {
+        | "mathbf" | "mathit" | "mathcal" | "mathbb"
+        | "textsubscript" | "textsuperscript" | "textnormal"
+        | "underline" | "overline" | "uline" => {
           let (content, skip) = read_braced_arg(&text, i);
           i += skip;
           current_line.push_str(&content);
@@ -234,17 +250,21 @@ fn process_body(body: &str) -> Vec<String> {
           current_line.push_str(&content);
         }
 
-        // Commands with args to completely discard (preamble-style in body).
+        // Commands to completely discard (consume all following [] and {} args).
         "color" | "bibliography" | "bibliographystyle" | "maketitle"
-        | "tableofcontents" | "newcommand" | "renewcommand" | "setlength"
-        | "addtolength" | "setcounter" | "addtocounter" | "usepackage"
-        | "RequirePackage" | "PassOptionsToPackage" | "geometry"
-        | "vspace*" | "hspace" | "hspace*" | "rule" | "includegraphics"
-        | "captionsetup" | "caption" | "subcaption" => {
-          // Consume all consecutive braced args but discard content.
+        | "tableofcontents" | "newcommand" | "renewcommand" | "providecommand"
+        | "setlength" | "addtolength" | "setcounter" | "addtocounter"
+        | "usepackage" | "RequirePackage" | "PassOptionsToPackage"
+        | "geometry" | "vspace*" | "hspace" | "hspace*" | "rule"
+        | "includegraphics" | "captionsetup" | "caption" | "subcaption"
+        | "pagestyle" | "thispagestyle" | "pagenumbering"
+        | "definecolor" | "colorlet" | "DeclareMathOperator"
+        | "theoremstyle" | "newtheorem" | "newenvironment" | "renewenvironment"
+        | "crefname" | "Crefname" | "hypersetup" | "setcitestyle"
+        | "IEEEauthorblockN" | "IEEEauthorblockA" | "institute"
+        | "affil" | "address" | "email" | "date" => {
           while i < len && (text[i] == '{' || text[i] == '[') {
             if text[i] == '[' {
-              // Optional arg [...].
               while i < len && text[i] != ']' { i += 1; }
               if i < len { i += 1; }
             } else {
@@ -254,13 +274,21 @@ fn process_body(body: &str) -> Vec<String> {
           }
         }
 
-        // Citations / refs → short placeholder.
-        "cite" | "citep" | "citet" | "citealt" => {
+        "cite" | "citep" | "citet" | "citealt" | "citealp" | "citeauthor"
+        | "citeyear" | "nocite" => {
+          // Optional note arg e.g. \citep[p.~3]{key}
+          if i < len && text[i] == '[' {
+            while i < len && text[i] != ']' { i += 1; }
+            if i < len { i += 1; }
+          }
           let (_key, skip) = read_braced_arg(&text, i);
           i += skip;
-          current_line.push_str("[ref]");
+          if cmd != "nocite" {
+            current_line.push_str("[ref]");
+          }
         }
-        "ref" | "eqref" => {
+        "ref" | "eqref" | "cref" | "Cref" | "autoref" | "vref"
+        | "nameref" | "pageref" => {
           let (_key, skip) = read_braced_arg(&text, i);
           i += skip;
           current_line.push_str("[§]");
@@ -268,24 +296,49 @@ fn process_body(body: &str) -> Vec<String> {
         "label" => {
           let (_key, skip) = read_braced_arg(&text, i);
           i += skip;
-          // silently drop
         }
-        "footnote" => {
+        "footnote" | "footnotetext" => {
+          // Skip optional mark arg e.g. \footnotetext[2]{...}
+          if i < len && text[i] == '[' {
+            while i < len && text[i] != ']' { i += 1; }
+            if i < len { i += 1; }
+          }
           let (note, skip) = read_braced_arg(&text, i);
           i += skip;
           current_line.push_str(" [note: ");
           current_line.push_str(note.trim());
           current_line.push(']');
         }
+        // \hyperref[label]{display text}
+        "hyperref" => {
+          if i < len && text[i] == '[' {
+            while i < len && text[i] != ']' { i += 1; }
+            if i < len { i += 1; }
+          }
+          let (content, skip) = read_braced_arg(&text, i);
+          i += skip;
+          current_line.push_str(&content);
+        }
         "url" | "href" => {
           let (url, skip) = read_braced_arg(&text, i);
           i += skip;
-          // For \href, skip the display text braced arg.
           if cmd == "href" {
-            let (_display, skip2) = read_braced_arg(&text, i);
+            let (display, skip2) = read_braced_arg(&text, i);
             i += skip2;
+            current_line.push_str(&display);
+          } else {
+            current_line.push_str(url.trim());
           }
-          current_line.push_str(url.trim());
+        }
+        // List items — bullet + flush.
+        "item" => {
+          // Skip optional [label] for description lists.
+          if i < len && text[i] == '[' {
+            while i < len && text[i] != ']' { i += 1; }
+            if i < len { i += 1; }
+          }
+          flush_line(&mut current_line, &mut out);
+          current_line.push_str("• ");
         }
 
         // Inline math \( ... \)
@@ -293,7 +346,13 @@ fn process_body(body: &str) -> Vec<String> {
           let (math, adv) = read_until_str(&text, i, r"\)");
           i += adv;
           let rendered = render(MathInput::Latex(math.trim()));
-          current_line.push_str(&rendered);
+          if rendered.contains('\n') {
+            flush_line(&mut current_line, &mut out);
+            let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
+            out.push(Block::DisplayMath(lines));
+          } else {
+            current_line.push_str(&rendered);
+          }
         }
         // Display math \[ ... \]
         "[" => {
@@ -301,12 +360,12 @@ fn process_body(body: &str) -> Vec<String> {
           i += adv;
           flush_line(&mut current_line, &mut out);
           let rendered = render(MathInput::Latex(math.trim()));
-          for l in rendered.lines() {
-            out.push(l.to_string());
+          let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
+          if !lines.is_empty() {
+            out.push(Block::DisplayMath(lines));
           }
         }
 
-        // Newline commands.
         "\\" | "newline" | "hline" => {
           flush_line(&mut current_line, &mut out);
         }
@@ -316,16 +375,18 @@ fn process_body(body: &str) -> Vec<String> {
             i += skip;
           };
           flush_line(&mut current_line, &mut out);
-          out.push(String::new());
+          out.push(Block::Blank);
         }
 
-        // Everything else — silently drop the command, keep args if any.
         _ => {
-          // If followed by braced arg, keep the content.
           if i < len && text[i] == '{' {
             let (content, skip) = read_braced_arg(&text, i);
             i += skip;
-            current_line.push_str(&content);
+            // Only output if it looks like prose (has spaces or punctuation).
+            // Single-word args are usually identifiers/style names — discard.
+            if content.contains(' ') || content.contains('\n') || content.contains(',') {
+              current_line.push_str(&content);
+            }
           }
         }
       }
@@ -335,22 +396,28 @@ fn process_body(body: &str) -> Vec<String> {
     // Inline math $...$ (single dollar sign, not $$).
     if c == '$' {
       if i + 1 < len && text[i + 1] == '$' {
-        // Display math $$ ... $$.
         i += 2;
         let (math, adv) = read_until_double_dollar(&text, i);
         i += adv;
         flush_line(&mut current_line, &mut out);
         let rendered = render(MathInput::Latex(math.trim()));
-        for l in rendered.lines() {
-          out.push(l.to_string());
+        let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
+        if !lines.is_empty() {
+          out.push(Block::DisplayMath(lines));
         }
       } else {
-        // Inline math $ ... $.
         i += 1;
         let (math, adv) = read_until_single_dollar(&text, i);
         i += adv;
         let rendered = render(MathInput::Latex(math.trim()));
-        current_line.push_str(&rendered);
+        if rendered.contains('\n') {
+          // Multi-line inline math (fractions etc.) — promote to display block.
+          flush_line(&mut current_line, &mut out);
+          let lines: Vec<String> = rendered.lines().map(|l| l.to_string()).collect();
+          out.push(Block::DisplayMath(lines));
+        } else {
+          current_line.push_str(&rendered);
+        }
       }
       continue;
     }
@@ -359,8 +426,7 @@ fn process_body(body: &str) -> Vec<String> {
     if c == '\n' {
       if i + 1 < len && text[i + 1] == '\n' {
         flush_line(&mut current_line, &mut out);
-        out.push(String::new());
-        // Skip additional blank lines.
+        out.push(Block::Blank);
         while i < len && text[i] == '\n' {
           i += 1;
         }
@@ -375,46 +441,39 @@ fn process_body(body: &str) -> Vec<String> {
   }
 
   flush_line(&mut current_line, &mut out);
-
-  // Word-wrap all prose lines at WRAP_WIDTH.
-  wrap_lines(out)
+  wrap_blocks(out)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn flush_line(line: &mut String, out: &mut Vec<String>) {
+fn flush_line(line: &mut String, out: &mut Vec<Block>) {
   let trimmed = line.trim().to_string();
   if !trimmed.is_empty() {
-    out.push(trimmed);
+    out.push(Block::Line(trimmed));
   }
   line.clear();
 }
 
-fn wrap_lines(lines: Vec<String>) -> Vec<String> {
+fn wrap_blocks(blocks: Vec<Block>) -> Vec<Block> {
   let mut out = Vec::new();
-  for line in lines {
-    if line.is_empty() {
-      out.push(String::new());
-      continue;
-    }
-    // Don't wrap header lines.
-    if line.starts_with("══") || line.starts_with("──") || line.starts_with('─') {
-      out.push(line);
-      continue;
-    }
-    for wrapped in textwrap::wrap(&line, WRAP_WIDTH) {
-      out.push(wrapped.to_string());
+  for block in blocks {
+    match block {
+      Block::Line(s) => {
+        for wrapped in textwrap::wrap(&s, WRAP_WIDTH) {
+          out.push(Block::Line(wrapped.to_string()));
+        }
+      }
+      // DisplayMath, Header, Matrix, Blank pass through unchanged.
+      other => out.push(other),
     }
   }
   out
 }
 
 /// Read a LaTeX command name starting at position `start` in `text`.
-/// Returns (command_name, chars_consumed_including_command).
 fn read_command(text: &[char], start: usize) -> (String, usize) {
   let mut cmd = String::new();
   let mut i = start;
-  // Single non-alpha char commands: \\, \[, \(, \%, etc.
   if i < text.len() && !text[i].is_alphabetic() {
     return (text[i].to_string(), 1);
   }
@@ -422,7 +481,6 @@ fn read_command(text: &[char], start: usize) -> (String, usize) {
     cmd.push(text[i]);
     i += 1;
   }
-  // Skip trailing whitespace after command name.
   while i < text.len() && text[i] == ' ' {
     i += 1;
   }
@@ -441,16 +499,11 @@ fn read_braced_arg(text: &[char], start: usize) -> (String, usize) {
     match text[i] {
       '{' => {
         depth += 1;
-        if depth > 1 {
-          content.push('{');
-        }
+        if depth > 1 { content.push('{'); }
       }
       '}' => {
         depth -= 1;
-        if depth == 0 {
-          i += 1;
-          break;
-        }
+        if depth == 0 { i += 1; break; }
         content.push('}');
       }
       c => content.push(c),
@@ -522,27 +575,91 @@ fn read_until_double_dollar(text: &[char], start: usize) -> (String, usize) {
   (content, i - start)
 }
 
-/// Extract the content of a named environment from a string (used for abstract).
+/// Extract the content of a named environment (used for abstract).
 fn extract_env(body: &str, env: &str) -> Option<String> {
   let begin = format!(r"\begin{{{env}}}");
   let end = format!(r"\end{{{env}}}");
   let start = body.find(&begin)? + begin.len();
   let finish = body.find(&end)?;
-  if start < finish {
-    Some(body[start..finish].to_string())
-  } else {
-    None
-  }
+  if start < finish { Some(body[start..finish].to_string()) } else { None }
 }
 
-/// Process prose text (used for abstract) — strips simple commands, wraps.
+/// Find `\cmd{...}` anywhere in `text` and return the braced content.
+fn extract_command_arg(text: &str, cmd: &str) -> Option<String> {
+  let pattern = format!(r"\{cmd}");
+  let pos = text.find(&pattern)?;
+  let after = text[pos + pattern.len()..].trim_start();
+  if !after.starts_with('{') {
+    return None;
+  }
+  let chars: Vec<char> = after.chars().collect();
+  let (content, _) = read_braced_arg(&chars, 0);
+  Some(content)
+}
+
+/// Strip LaTeX commands from inline text; keep argument content.
+fn clean_inline(s: String) -> String {
+  let chars: Vec<char> = s.chars().collect();
+  let mut out = String::new();
+  let mut i = 0;
+  while i < chars.len() {
+    if chars[i] == '\\' && i + 1 < chars.len() {
+      let (cmd, consumed) = read_command(&chars, i + 1);
+      i += 1 + consumed;
+      match cmd.as_str() {
+        // Discard footnote-style args completely.
+        "thanks" | "footnote" | "footnotemark" => {
+          if i < chars.len() && chars[i] == '{' {
+            let (_, skip) = read_braced_arg(&chars, i);
+            i += skip;
+          }
+        }
+        // Keep content of common text commands.
+        _ => {
+          if i < chars.len() && chars[i] == '{' {
+            let (content, skip) = read_braced_arg(&chars, i);
+            i += skip;
+            out.push_str(&content);
+          }
+        }
+      }
+    } else {
+      out.push(chars[i]);
+      i += 1;
+    }
+  }
+  out.trim().to_string()
+}
+
+/// Clean an \author{...} value: collapse \and, \\, \inst etc. into a single line.
+fn clean_authors(s: String) -> String {
+  let s = s.replace(r"\and", ",").replace(r"\\", ",").replace(r"\AND", ",");
+  // Strip everything else via clean_inline.
+  let cleaned = clean_inline(s);
+  // Collapse runs of commas/whitespace.
+  let mut out = String::new();
+  let mut last_comma = false;
+  for part in cleaned.split(',') {
+    let part = part.trim();
+    if part.is_empty() {
+      continue;
+    }
+    if !out.is_empty() {
+      out.push_str(", ");
+    }
+    out.push_str(part);
+    last_comma = false;
+  }
+  let _ = last_comma;
+  out
+}
+
+/// Process prose text for the abstract — strips simple commands, wraps.
 fn process_prose(text: &str) -> Vec<String> {
-  // For the abstract we run a simplified pass — just strip obvious commands.
   let mut out = String::new();
   let chars: Vec<char> = text.chars().collect();
   let mut i = 0;
   while i < chars.len() {
-    // Strip % comments.
     if chars[i] == '%' && (i == 0 || chars[i - 1] != '\\') {
       while i < chars.len() && chars[i] != '\n' { i += 1; }
       continue;

@@ -170,6 +170,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 name = "arxiv-render"
 version = "0.1.0"
 dependencies = [
+ "doc-model",
  "flate2",
  "math-render",
  "reqwest 0.12.28",
@@ -267,6 +268,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "block-reader"
+version = "0.1.0"
+dependencies = [
+ "arxiv-render",
+ "crossterm",
+ "doc-model",
+ "ratatui",
 ]
 
 [[package]]
@@ -860,6 +871,10 @@ dependencies = [
  "quote",
  "syn 2.0.106",
 ]
+
+[[package]]
+name = "doc-model"
+version = "0.1.0"
 
 [[package]]
 name = "dotenvy"
@@ -3933,6 +3948,7 @@ name = "trench"
 version = "0.1.19"
 dependencies = [
  "arboard",
+ "arxiv-render",
  "base64 0.22.1",
  "chat",
  "chrono",

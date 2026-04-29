@@ -15,7 +15,7 @@ use crate::app::{
 };
 use crate::models::{ContentType, SignalLevel, SourcePlatform, WorkflowState};
 
-pub const RIGHT_COL_WIDTH: u16 = 36;
+pub const RIGHT_COL_WIDTH: u16 = 50;
 
 const WIDE_TITLE_MIN_WIDTH: u16 = 108;
 
@@ -700,25 +700,40 @@ fn draw_narrow_feed(frame: &mut Frame, app: &mut App, area: Rect) {
   let t = app.active_theme.theme();
   let viewport_rows = area.height as usize;
   let selected = app.active_selected_index();
-
-  // Count in a scoped borrow so offset can be mutated without holding a ref.
-  let total = { app.visible_items().len() };
-
-  let mut offset = app.active_list_offset();
-  if selected < offset {
-    offset = selected;
-  } else if selected >= offset + viewport_rows {
-    offset = selected + 1 - viewport_rows;
-  }
-  // Cap at total - viewport_rows so the last item sits at the bottom edge, not the top.
-  offset = offset.min(total.saturating_sub(viewport_rows));
-  app.set_active_list_offset(offset);
-
-  let visible = app.visible_items();
   // Reserve space for prefix (2) + " — Type — Date" suffix (~20 chars).
   let suffix_w = 20usize;
   let prefix_w = 2usize;
   let title_w = (area.width as usize).saturating_sub(prefix_w + suffix_w).max(10);
+
+  // Compute scroll offset in a scoped borrow; items can wrap to 2 rows so we
+  // cannot use `viewport_rows` as the item count — use count_visible_items.
+  let mut offset = app.active_list_offset();
+  {
+    let visible = app.visible_items();
+    let total = visible.len();
+    if selected < offset {
+      offset = selected;
+    } else {
+      let vc = count_visible_items(&visible, offset, viewport_rows, title_w);
+      if selected >= offset + vc {
+        // Walk backward from selected accumulating row heights to find new offset.
+        let mut rows = 0usize;
+        offset = selected;
+        for i in (0..=selected).rev() {
+          let h = if visible[i].title.len() > title_w { 2 } else { 1 };
+          if rows + h > viewport_rows {
+            break;
+          }
+          rows += h;
+          offset = i;
+        }
+      }
+    }
+    offset = offset.min(total.saturating_sub(1));
+  }
+  app.set_active_list_offset(offset);
+
+  let visible = app.visible_items();
   let mut y = area.y;
   for (abs_i, item) in visible.iter().enumerate().skip(offset) {
     if y >= area.y + area.height {
@@ -1207,9 +1222,153 @@ fn draw_details_panel(frame: &mut Frame, app: &mut App, area: Rect) {
   let t = app.active_theme.theme();
   let t_details = std::time::Instant::now();
 
+  let bottom_h = area.height * 35 / 100;
+  let top_h = area.height.saturating_sub(bottom_h + 1);
+  let div_y = area.y + top_h;
+
+  let top_area = Rect { height: top_h, ..area };
+  let bottom_area = Rect { y: div_y + 1, height: bottom_h, ..area };
+
+  // Draw the bottom pane's 4 borders in accent color.
+  // ├─── Home ────┤ divider in the standard border colour.
+  let sb = Style::default().fg(t.border);
+  let title_fill = format!("{:─^w$}", " Home ", w = area.width as usize);
+  frame.render_widget(
+    Paragraph::new(Span::styled(title_fill, sb)),
+    Rect { x: area.x, y: div_y, width: area.width, height: 1 },
+  );
+  frame.render_widget(
+    Paragraph::new(Span::styled("├", sb)),
+    Rect { x: area.x.saturating_sub(1), y: div_y, width: 1, height: 1 },
+  );
+  frame.render_widget(
+    Paragraph::new(Span::styled("┤", sb)),
+    Rect { x: area.x + area.width, y: div_y, width: 1, height: 1 },
+  );
+
+  // ── Dashboard (bottom pane) ───────────────────────────────────────────────
+  {
+    let dash_inner = Rect {
+      x: bottom_area.x + 1,
+      width: bottom_area.width.saturating_sub(2),
+      ..bottom_area
+    };
+    let w = dash_inner.width as usize;
+
+    let inbox = app
+      .items
+      .iter()
+      .filter(|i| i.workflow_state == WorkflowState::Inbox)
+      .count();
+    let queued = app
+      .items
+      .iter()
+      .filter(|i| i.workflow_state == WorkflowState::Queued)
+      .count();
+    let read = app
+      .items
+      .iter()
+      .filter(|i| i.workflow_state == WorkflowState::DeepRead)
+      .count();
+    let total = app.items.len();
+
+    let header_style = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(t.text_dim);
+    let val_style = Style::default().fg(t.text);
+
+    // Continue Reading
+    let continue_title = app.last_read.as_deref().unwrap_or("─ nothing opened yet ─");
+    let continue_source = app.last_read_source.as_deref().unwrap_or("");
+
+    // At a Glance counts
+    let glance_line = format!(
+      "Inbox {inbox}   Queue {queued}   Read {read}   Total {total}"
+    );
+
+    // Your Queue: first two queued paper titles
+    let queue_items: Vec<&str> = app
+      .items
+      .iter()
+      .filter(|i| i.workflow_state == WorkflowState::Queued)
+      .map(|i| i.title.as_str())
+      .take(2)
+      .collect();
+
+    // Recent (last 48 h): items published today or yesterday
+    let recent_count = {
+      let today = crate::store::enrichment_cache::today_str();
+      let yesterday = (chrono::Utc::now() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+      app
+        .items
+        .iter()
+        .filter(|i| i.published_at == today || i.published_at == yesterday)
+        .count()
+    };
+
+    // Active model
+    let model = app.settings_default_chat_provider.clone();
+
+    let mut lines: Vec<Line> = vec![
+      Line::from(""),
+      Line::from(Span::styled("Continue Reading", header_style)),
+      Line::from(vec![
+        Span::styled("  ", label_style),
+        Span::styled(truncate(continue_title, w.saturating_sub(2)), val_style),
+      ]),
+    ];
+    if !continue_source.is_empty() {
+      lines.push(Line::from(vec![
+        Span::styled("  ", label_style),
+        Span::styled(continue_source, label_style),
+      ]));
+    }
+    lines.extend([
+      Line::from(""),
+      Line::from(Span::styled("At a Glance", header_style)),
+      Line::from(vec![
+        Span::styled("  ", label_style),
+        Span::styled(truncate(&glance_line, w.saturating_sub(2)), val_style),
+      ]),
+      Line::from(""),
+      Line::from(Span::styled("Your Queue", header_style)),
+    ]);
+    if queue_items.is_empty() {
+      lines.push(Line::from(vec![
+        Span::styled("  ", label_style),
+        Span::styled("─ empty ─", label_style),
+      ]));
+    } else {
+      for title in queue_items {
+        lines.push(Line::from(vec![
+          Span::styled("  ", label_style),
+          Span::styled(truncate(title, w.saturating_sub(2)), val_style),
+        ]));
+      }
+    }
+    lines.extend([
+      Line::from(""),
+      Line::from(vec![
+        Span::styled("Recent (48h)  ", header_style),
+        Span::styled(
+          format!("{recent_count} new paper{}", if recent_count == 1 { "" } else { "s" }),
+          val_style,
+        ),
+      ]),
+      Line::from(""),
+      Line::from(vec![
+        Span::styled("Active model  ", header_style),
+        Span::styled(model, val_style),
+      ]),
+    ]);
+
+    frame.render_widget(Paragraph::new(lines), dash_inner);
+  }
+
   // Add 1-char left margin so text doesn't abut the divider.
   let inner =
-    Rect { x: area.x + 1, width: area.width.saturating_sub(1), ..area };
+    Rect { x: top_area.x + 1, width: top_area.width.saturating_sub(1), ..top_area };
 
   // Reset scroll when the selected item changes, before borrowing item data.
   {
@@ -1382,10 +1541,11 @@ fn draw_details_panel(frame: &mut Frame, app: &mut App, area: Rect) {
       frame.render_stateful_widget(sb, inner, &mut sb_state);
     }
   } else {
-    let empty = Paragraph::new("No item selected")
+    let hint = Paragraph::new("Select an item from the feed")
       .style(Style::default().fg(t.text_dim));
-    frame.render_widget(empty, inner);
+    frame.render_widget(hint, inner);
   }
+
   log::debug!(
     "draw_details_panel total: {}ms",
     t_details.elapsed().as_millis()

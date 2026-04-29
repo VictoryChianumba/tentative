@@ -1,10 +1,9 @@
 use arxiv_render::{fetch, parse};
-use doc_model::build_visual_lines;
 
 fn main() {
   let arg = std::env::args().nth(1).unwrap_or_default();
   if arg.is_empty() {
-    eprintln!("usage: arxiv-render <arxiv-id-or-url>");
+    eprintln!("usage: block-reader <arxiv-id-or-url>");
     std::process::exit(1);
   }
 
@@ -29,11 +28,10 @@ fn main() {
   eprintln!("found {} .tex file(s); parsing ...", sources.len());
 
   let blocks = parse::to_blocks(sources);
-  let visual_lines = build_visual_lines(&blocks, 80);
+  eprintln!("{} blocks — launching reader ...", blocks.len());
 
-  for vl in &visual_lines {
-    println!("{}", vl.text);
+  if let Err(e) = block_reader::run(blocks) {
+    eprintln!("reader error: {e}");
+    std::process::exit(1);
   }
-
-  eprintln!("--- {} blocks → {} visual lines ---", blocks.len(), visual_lines.len());
 }
