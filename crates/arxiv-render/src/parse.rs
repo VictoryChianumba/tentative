@@ -1381,13 +1381,8 @@ fn clean_bib_entry(s: &str) -> String {
       if i < len && chars[i] == '{' {
         let (content, skip) = read_braced_arg(&chars, i);
         i += skip;
-        match cmd.as_str() {
-          "emph" | "textbf" | "textit" | "texttt" | "textrm" | "text"
-          | "bibinfo" | "BIBfitem" | "newblock" => {
-            out.push_str(&content);
-          }
-          _ => { out.push_str(&content); }
-        }
+        // Recurse so that commands like \em inside {\em journal} are stripped.
+        out.push_str(&clean_bib_entry(&content));
       }
       continue;
     }
