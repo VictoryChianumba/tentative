@@ -224,6 +224,96 @@ Status markers: [x] done  [-] in progress / partial  [ ] not started
 - [x] Wire winning approach into Tentative (Step 10 complete)
 - [ ] Compare and clean up both agent branches
 
+## block-reader / arXiv paper reading (feat/block-model branch)
+
+### Parse quality
+- [x] doc-model crate: Block and VisualLine types
+- [x] arxiv-render crate: LaTeX → Block pipeline (to_blocks)
+- [x] block-reader crate: TUI reader with ratatui
+- [x] `\newcommand` macro extraction and expansion in prose and math
+- [x] Theorem / lemma / proof environments → numbered header + ∎ end marker
+- [x] `\begin{enumerate}` → numbered markers; `\begin{itemize}` → bullets
+- [x] Figure / table captions extracted → `[Figure: caption text]`
+- [x] `\begin{tabular}` parsed → Matrix blocks with ┌/│/└ border art
+- [x] Footnotes deferred to "Notes" section at end of document
+- [x] Accent characters: `\'e`→é, `\"o`→ö, `\^a`→â, and alphabetic forms
+- [x] Special letter commands: `\ss`→ß, `\ae`→æ, `\o`→ø, etc.
+- [x] `~`→space, `---`→em dash, `--`→en dash
+- [x] Macro expansion inside `$...$` and `$$...$$` before rendering
+- [x] `\_` normalised in math contexts; math rendered inside footnote text
+- [x] Two-pass label collection — `\label`/`\ref`/`\eqref`/`\cite` resolved before render
+- [x] `\begin{algorithm}`/`algorithmic` environments → plain-text pseudocode
+- [x] `\begin{lstlisting}`/`verbatim` → CodeBlock with language tag
+
+### Reader UX
+- [x] Section-jump navigation: `[` prev section, `]` next section
+- [x] Toggleable TOC side panel: `t` — current section tracked and highlighted
+- [x] Width-aware reflow when TOC toggles (content_width_for helper, rebuild on toggle/resize)
+- [x] Back-navigation stack: `Ctrl+O` to return to previous position after jump
+- [x] Paper metadata header bar — title, authors pinned above content
+- [ ] `?` help overlay showing all block-reader keybindings
+- [ ] Bookmarks — mark a line, jump back to it
+
+### Persistence and integration
+- [x] Reading progress persistence per arXiv ID (~/.config/trench/reader_progress.json)
+- [ ] Wire block-reader into trench (currently siloed on feat/block-model branch)
+- [ ] Abstract quick-view from feed: `Space` shows summary popup without entering reader
+
+### Text styling (not yet implemented)
+- [ ] Bold text — `\textbf{}` → Modifier::BOLD
+- [ ] Italic — `\textit{}`, `\emph{}` → Modifier::ITALIC
+- [ ] Underline — `\underline{}` → Modifier::UNDERLINED
+- [ ] Strikethrough — `\sout{}` → Modifier::CROSSED_OUT
+- [ ] Monospace — `\texttt{}`, `\verb`, `verbatim` blocks → distinct colour
+- [ ] Coloured text — `\textcolor{}` → ratatui fg()
+
+### Structure and numbering
+- [x] Numbered sections — "1  Introduction", "2.1  Background"
+- [x] Numbered theorems — "Theorem 1", "Lemma 2"
+- [x] Proof end marker — ∎ at end of proof environments
+- [x] Numbered equations — `(1)`, `(2)` right-justified in display math
+- [x] Cross-reference resolution — `\ref{eq:elbo}` → equation number or label string
+- [x] Citation formatting — `\cite{vaswani}` → `[1]`
+- [x] Bibliography / references section rendered (parse_bibliography, clean_bib_entry)
+
+### Environments
+- [x] Algorithm / pseudocode blocks — plain text render (parse_algorithmic_body)
+- [x] Code listings (`lstlisting`, `verbatim`) — CodeBlock with language tag
+- [ ] Nested lists — list within list, indent tracks depth
+- [ ] Table horizontal rules — `\hline`, `\toprule`, `\midrule`, `\bottomrule` as `─────` separators
+
+### Math rendering
+- [x] Silent garbling fix — backslash in tui-math output triggers strip_latex fallback
+- [x] Symbol table (~100 entries) — Greek, calculus, relations, set theory, arrows, operators
+- [x] Multi-line align/gather splitting — render_multiline() splits on \\ before tui-math
+- [x] Enhanced strip_latex — \frac→a/b, \sqrt→√x, Unicode super/subscripts, recursive unwrap
+
+### Navigation and cross-document UX
+- [ ] Cross-reference jumping — Enter on `[ref]` / `Figure 3` jumps to target
+- [ ] Terminal hyperlinks — `\url{}` and `\href{}` as OSC 8 clickable links
+- [ ] `[ref]` markers → expandable citations overlay (press Enter to expand inline)
+
+### Hard but achievable
+- [ ] Two-column layout — IEEE-style papers; simulate with side-by-side scroll panes
+- [ ] Full BibTeX parsing — resolve `\cite{key}` to author/year from bundled .bib file (arXiv includes both)
+
+### Richer document model
+- [x] InlineSpan { bold, italic, underline, strikethrough, monospace, color } — in doc-model
+- [x] Block::StyledLine(Vec<InlineSpan>) — parse.rs emits this; build_visual_lines handles it
+- [x] Block::ListItem { depth, marker, content } — typed list items
+- [x] Block::CodeBlock { lang, lines } — verbatim/listing with language tag
+- [x] Block::Rule — horizontal separator
+- [ ] Block::Quote — blockquote / epigraph styling
+- [ ] Bold/italic/monospace rendered with ratatui Modifier in block-reader (infrastructure exists, render.rs not yet wired)
+
+### "Cannot achieve" — to be solved
+- [ ] Images and figures — currently: no pixel graphics in TTY/tmux. Path forward: Kitty graphics protocol with tmux passthrough, or sixel, or inline SVG-to-ASCII fallback for simple diagrams
+- [ ] Knuth-quality math typesetting — vertical fractions, proper integral limits, stacked scripts. Path forward: render math to small pixel bitmaps via MathJax/KaTeX headless → sixel/kitty inline
+- [ ] Small caps (`\textsc{}`) — no terminal equivalent today. Path forward: Unicode small-cap letter substitution (ᴀʙᴄᴅ…) as approximation
+- [ ] Multi-column body text — physically possible in terminal; deferred until single-column is perfect
+- [ ] Margin notes (`\marginpar{}`) — path forward: collect and display in TOC panel or as footnotes
+- [ ] Multi-file LaTeX with custom .sty / class files — path forward: bundle a subset of common packages (amsmath, natbib, algorithm2e) as known macro tables
+
 ## README / open source
 - [x] Write README for public release
 - [x] Add hero screenshot/demo
