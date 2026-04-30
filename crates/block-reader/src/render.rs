@@ -4,7 +4,7 @@ use ratatui::{
   layout::{Constraint, Direction, Layout, Rect},
   style::{Color, Modifier, Style},
   text::{Line, Span},
-  widgets::{Block, Paragraph},
+  widgets::{Block, Borders, Paragraph},
 };
 
 use crate::state::{Mode, Reader};
@@ -14,12 +14,17 @@ use crate::state::{Mode, Reader};
 const BABY_BLUE: Color = Color::Rgb(100, 181, 246);
 const ACCENT_DIM: Color = Color::Rgb(70, 130, 180);
 const MATH_COLOR: Color = Color::Rgb(80, 200, 160);
+const TOC_DIM: Color = Color::Rgb(80, 95, 115);
+const TOC_WIDTH: u16 = 28;
 
 pub fn draw(frame: &mut Frame, reader: &Reader) {
   let area = frame.area();
+  let (toc_area, content_area, status_area, search_area) =
+    split_layout(area, &reader.mode, reader.toc_visible);
 
-  let (content_area, status_area, search_area) = split_layout(area, &reader.mode);
-
+  if let Some(ta) = toc_area {
+    draw_toc(frame, reader, ta);
+  }
   draw_content(frame, reader, content_area);
   draw_status(frame, reader, status_area);
   if reader.mode == Mode::Search {
@@ -27,23 +32,39 @@ pub fn draw(frame: &mut Frame, reader: &Reader) {
   }
 }
 
-fn split_layout(area: Rect, mode: &Mode) -> (Rect, Rect, Option<Rect>) {
-  match mode {
+fn split_layout(
+  area: Rect,
+  mode: &Mode,
+  toc_visible: bool,
+) -> (Option<Rect>, Rect, Rect, Option<Rect>) {
+  let (toc_area, right) = if toc_visible {
+    let h = Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(TOC_WIDTH), Constraint::Min(1)])
+      .split(area);
+    (Some(h[0]), h[1])
+  } else {
+    (None, area)
+  };
+
+  let (content_area, status_area, search_area) = match mode {
     Mode::Normal => {
-      let chunks = Layout::default()
+      let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
-      (chunks[0], chunks[1], None)
+        .split(right);
+      (v[0], v[1], None)
     }
     Mode::Search => {
-      let chunks = Layout::default()
+      let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
-        .split(area);
-      (chunks[0], chunks[1], Some(chunks[2]))
+        .split(right);
+      (v[0], v[1], Some(v[2]))
     }
-  }
+  };
+
+  (toc_area, content_area, status_area, search_area)
 }
 
 fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect) {
@@ -132,6 +153,65 @@ fn highlight_query(text: &str, query: &str, bg: Color) -> Line<'static> {
   }
 
   Line::from(spans)
+}
+
+fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect) {
+  let panel_h = area.height as usize;
+  // 1 char right border + 1 char leading space = 2 chars overhead
+  let inner_w = area.width.saturating_sub(2) as usize;
+  let cur_sec = reader.current_section_idx();
+
+  // Scroll to keep current section vertically centered in the panel.
+  let toc_scroll = cur_sec
+    .map(|idx| idx.saturating_sub(panel_h / 2))
+    .unwrap_or(0);
+
+  let total = reader.sections.len();
+
+  let lines: Vec<Line> = (0..panel_h)
+    .map(|row| {
+      let sec_idx = toc_scroll + row;
+      if sec_idx >= total {
+        return Line::raw("");
+      }
+      let (_, level, text) = &reader.sections[sec_idx];
+      let indent = match level {
+        1 => 0usize,
+        2 => 2usize,
+        _ => 4usize,
+      };
+      let avail = inner_w.saturating_sub(indent);
+      let label = format!(" {}{}", " ".repeat(indent), toc_trunc(text, avail));
+      let is_current = cur_sec.map_or(false, |c| c == sec_idx);
+      if is_current {
+        Line::styled(label, Style::default().fg(BABY_BLUE).add_modifier(Modifier::BOLD))
+      } else {
+        Line::styled(label, Style::default().fg(TOC_DIM))
+      }
+    })
+    .collect();
+
+  let widget = Paragraph::new(lines).block(
+    Block::default()
+      .borders(Borders::RIGHT)
+      .border_style(Style::default().fg(Color::DarkGray)),
+  );
+  frame.render_widget(widget, area);
+}
+
+fn toc_trunc(s: &str, max: usize) -> String {
+  if max == 0 {
+    return String::new();
+  }
+  let count = s.chars().count();
+  if count <= max {
+    s.to_string()
+  } else if max > 1 {
+    let end = s.char_indices().nth(max - 1).map(|(i, _)| i).unwrap_or(s.len());
+    format!("{}…", &s[..end])
+  } else {
+    s.chars().take(max).collect()
+  }
 }
 
 fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect) {

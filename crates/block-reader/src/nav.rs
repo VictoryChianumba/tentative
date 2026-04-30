@@ -94,4 +94,20 @@ impl Reader {
     self.search_query.clear();
     self.search_matches.clear();
   }
+
+  pub fn jump_next_section(&mut self) {
+    let cur = self.current_line();
+    if let Some(s) = self.sections.iter().find(|s| s.0 > cur) {
+      self.offset = s.0;
+      self.cursor_y = 0;
+    }
+  }
+
+  pub fn jump_prev_section(&mut self) {
+    let cur = self.current_line();
+    if let Some(s) = self.sections.iter().rfind(|s| s.0 < cur) {
+      self.offset = s.0;
+      self.cursor_y = 0;
+    }
+  }
 }

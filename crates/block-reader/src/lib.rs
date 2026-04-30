@@ -67,6 +67,9 @@ fn handle_normal(reader: &mut Reader, code: KeyCode, mods: KeyModifiers) -> bool
     KeyCode::Char('/') => reader.enter_search(),
     KeyCode::Char('n') => reader.search_next(),
     KeyCode::Char('N') => reader.search_prev(),
+    KeyCode::Char(']') => reader.jump_next_section(),
+    KeyCode::Char('[') => reader.jump_prev_section(),
+    KeyCode::Char('t') => reader.toggle_toc(),
     _ => {}
   }
   false
