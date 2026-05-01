@@ -27,6 +27,7 @@ cli-text-reader = { path = "../cli-text-reader" }
 block-reader = { path = "../crates/block-reader" }
 doc-model = { path = "../crates/doc-model" }
 arxiv-render = { path = "../crates/arxiv-render" }
+ui-theme = { path = "../crates/ui-theme" }
 syntect = "5"
 readability = "0.3"
 url = "2"

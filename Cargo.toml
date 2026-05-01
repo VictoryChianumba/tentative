@@ -16,6 +16,7 @@ members = [
   "crates/arxiv-render",
   "crates/doc-model",
   "crates/block-reader",
+  "crates/ui-theme",
 
   # Internal
   # "examples",

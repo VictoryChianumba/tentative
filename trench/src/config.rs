@@ -31,7 +31,7 @@ pub struct Config {
   #[serde(default)]
   pub sources: SourcesConfig,
   #[serde(default)]
-  pub theme: crate::theme::ThemeId,
+  pub theme: ui_theme::ThemeId,
 }
 
 fn default_chat_provider() -> String {

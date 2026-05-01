@@ -281,6 +281,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "ui-theme",
 ]
 
 [[package]]
@@ -399,6 +400,7 @@ dependencies = [
  "serde",
  "serde_json",
  "textwrap",
+ "ui-theme",
  "uuid",
 ]
 
@@ -2233,6 +2235,7 @@ dependencies = [
  "serde_json",
  "textwrap",
  "tui-textarea",
+ "ui-theme",
 ]
 
 [[package]]
@@ -3974,6 +3977,7 @@ dependencies = [
  "serde_json",
  "syntect",
  "textwrap",
+ "ui-theme",
  "url",
 ]
 
@@ -4023,6 +4027,15 @@ name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
+
+[[package]]
+name = "ui-theme"
+version = "0.1.19"
+dependencies = [
+ "ratatui",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "unicase"
