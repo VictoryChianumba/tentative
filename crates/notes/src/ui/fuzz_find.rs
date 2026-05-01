@@ -53,7 +53,7 @@ impl FuzzFindPopup<'_> {
     let block = Block::default()
       .title("Search Query")
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER));
+      .border_style(Style::default().fg(theme::current().border));
     query_text_box.set_cursor_line_style(Style::default());
     query_text_box.set_block(block);
 
@@ -72,7 +72,7 @@ impl FuzzFindPopup<'_> {
 
     let block = Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER))
+      .border_style(Style::default().fg(theme::current().border))
       .title("─── Fuzzy Find ───");
 
     frame.render_widget(Clear, area);
@@ -138,7 +138,7 @@ impl FuzzFindPopup<'_> {
     let block = Block::default()
       .title(block_title)
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER));
+      .border_style(Style::default().fg(theme::current().border));
 
     let list = List::new(items)
       .block(block)

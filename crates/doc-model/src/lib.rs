@@ -105,9 +105,35 @@ pub enum VisualLineKind {
 /// centering offset of MathLine entries changes on resize).
 pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<VisualLine> {
   let mut out = Vec::new();
+  let mut i = 0;
 
-  for (block_idx, block) in blocks.iter().enumerate() {
-    match block {
+  while i < blocks.len() {
+    // Table groups: consecutive Rule and Matrix blocks are rendered together
+    // so they can share column widths and proper box-drawing borders.
+    if matches!(&blocks[i], Block::Rule | Block::Matrix { .. }) {
+      let group_start = i;
+      while i < blocks.len() && matches!(&blocks[i], Block::Rule | Block::Matrix { .. }) {
+        i += 1;
+      }
+      let group = &blocks[group_start..i];
+      let has_matrix = group.iter().any(|b| matches!(b, Block::Matrix { .. }));
+      if has_matrix {
+        render_table_group(group, group_start, &mut out);
+      } else {
+        for (k, _) in group.iter().enumerate() {
+          out.push(VisualLine {
+            block_idx: group_start + k,
+            line_in_block: 0,
+            text: "─".repeat(terminal_width),
+            kind: VisualLineKind::Rule,
+          });
+        }
+      }
+      continue;
+    }
+
+    let block_idx = i;
+    match &blocks[i] {
       Block::Line(s) => {
         out.push(VisualLine {
           block_idx,
@@ -138,10 +164,9 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
       Block::DisplayMath { lines, num } => {
         let block_width = lines.iter().map(|l| visual_width(l)).max().unwrap_or(0);
         let n = lines.len();
-        for (i, line) in lines.iter().enumerate() {
+        for (li, line) in lines.iter().enumerate() {
           let mut centered = center_line(line, block_width, terminal_width);
-          // Right-justify the equation number on the last line.
-          if i == n - 1 {
+          if li == n - 1 {
             if let Some(eq_num) = num {
               let tag = format!("({})", eq_num);
               let used = visual_width(&centered);
@@ -154,52 +179,12 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
           }
           out.push(VisualLine {
             block_idx,
-            line_in_block: i,
+            line_in_block: li,
             text: centered,
             kind: VisualLineKind::MathLine {
               block_width,
-              is_first: i == 0,
-              is_last: i == n - 1,
-            },
-          });
-        }
-      }
-
-      Block::Matrix { rows } => {
-        if rows.is_empty() {
-          continue;
-        }
-        // Compute max width per column.
-        let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-        let mut col_widths = vec![0usize; ncols];
-        for row in rows {
-          for (j, cell) in row.iter().enumerate() {
-            col_widths[j] = col_widths[j].max(visual_width(cell));
-          }
-        }
-        let n = rows.len();
-        for (i, row) in rows.iter().enumerate() {
-          let mut cells: Vec<String> = row
-            .iter()
-            .enumerate()
-            .map(|(j, cell)| {
-              let w = col_widths.get(j).copied().unwrap_or(0);
-              format!("{:<width$}", cell, width = w)
-            })
-            .collect();
-          // Pad missing columns.
-          while cells.len() < ncols {
-            let j = cells.len();
-            cells.push(" ".repeat(col_widths.get(j).copied().unwrap_or(0)));
-          }
-          let text = cells.join("  ");
-          out.push(VisualLine {
-            block_idx,
-            line_in_block: i,
-            text,
-            kind: VisualLineKind::MatrixLine {
-              is_first: i == 0,
-              is_last: i == n - 1,
+              is_first: li == 0,
+              is_last: li == n - 1,
             },
           });
         }
@@ -207,24 +192,22 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
 
       Block::StyledLine(spans) => {
         let wrapped = wrap_spans(spans, terminal_width);
-        let total = wrapped.len();
-        for (i, (line_spans, plain)) in wrapped.into_iter().enumerate() {
+        for (li, (line_spans, plain)) in wrapped.into_iter().enumerate() {
           out.push(VisualLine {
             block_idx,
-            line_in_block: i,
+            line_in_block: li,
             text: plain,
             kind: VisualLineKind::StyledProse(line_spans),
           });
-          let _ = total; // suppress unused warning
         }
       }
 
       Block::ListItem { depth, marker, content } => {
         let wrapped = wrap_list_item(*depth, marker, content, terminal_width);
-        for (i, (_line_spans, plain, is_continuation)) in wrapped.into_iter().enumerate() {
+        for (li, (_line_spans, plain, is_continuation)) in wrapped.into_iter().enumerate() {
           out.push(VisualLine {
             block_idx,
-            line_in_block: i,
+            line_in_block: li,
             text: plain,
             kind: VisualLineKind::ListItem {
               depth: *depth,
@@ -250,31 +233,150 @@ pub fn build_visual_lines(blocks: &[Block], terminal_width: usize) -> Vec<Visual
         }
       }
 
-      Block::Rule => {
-        out.push(VisualLine {
-          block_idx,
-          line_in_block: 0,
-          text: "─".repeat(terminal_width),
-          kind: VisualLineKind::Rule,
-        });
-      }
-
       Block::Quote(spans) => {
         let quote_width = terminal_width.saturating_sub(4).max(1);
         let wrapped = wrap_spans(spans, quote_width);
-        for (i, (_line_spans, plain)) in wrapped.into_iter().enumerate() {
+        for (li, (_line_spans, plain)) in wrapped.into_iter().enumerate() {
           out.push(VisualLine {
             block_idx,
-            line_in_block: i,
+            line_in_block: li,
             text: plain,
-            kind: VisualLineKind::Quote { is_continuation: i > 0 },
+            kind: VisualLineKind::Quote { is_continuation: li > 0 },
           });
+        }
+      }
+
+      // Rule and Matrix are handled above via the table-group path.
+      Block::Rule | Block::Matrix { .. } => {}
+    }
+
+    i += 1;
+  }
+
+  out
+}
+
+// ── Table rendering helpers ───────────────────────────────────────────────────
+
+/// Build a horizontal border line for a table.
+/// Example: make_border(&[10,6], '┌','┬','┐','─') → "┌────────────┬────────┐"
+fn make_border(col_widths: &[usize], left: char, mid: char, right: char, fill: char) -> String {
+  let mut s = String::new();
+  s.push(left);
+  for (j, &w) in col_widths.iter().enumerate() {
+    for _ in 0..w + 2 { s.push(fill); }
+    if j + 1 < col_widths.len() { s.push(mid); }
+  }
+  s.push(right);
+  s
+}
+
+/// Format a single data row: "│ cell1 │ cell2 │"
+fn format_data_row(padded_cells: &[String]) -> String {
+  let mut s = String::from('│');
+  for cell in padded_cells {
+    s.push(' ');
+    s.push_str(cell);
+    s.push(' ');
+    s.push('│');
+  }
+  s
+}
+
+/// Render a table group — a run of consecutive `Block::Rule` and `Block::Matrix` blocks.
+/// Computes shared column widths and emits proper box-drawing borders.
+fn render_table_group(group: &[Block], base_block_idx: usize, out: &mut Vec<VisualLine>) {
+  // Compute unified column widths across all Matrix blocks in this group.
+  let ncols = group.iter()
+    .filter_map(|b| if let Block::Matrix { rows } = b { Some(rows) } else { None })
+    .flat_map(|rows| rows.iter())
+    .map(|r| r.len())
+    .max()
+    .unwrap_or(0);
+
+  if ncols == 0 { return; }
+
+  let mut col_widths = vec![0usize; ncols];
+  for block in group {
+    if let Block::Matrix { rows } = block {
+      for row in rows {
+        for (j, cell) in row.iter().enumerate() {
+          if j < ncols {
+            col_widths[j] = col_widths[j].max(visual_width(cell));
+          }
         }
       }
     }
   }
 
-  out
+  let top = make_border(&col_widths, '┌', '┬', '┐', '─');
+  let mid = make_border(&col_widths, '├', '┼', '┤', '─');
+  let bot = make_border(&col_widths, '└', '┴', '┘', '─');
+
+  let n = group.len();
+  let mut added_top = false;
+  let mut seq = 0usize; // line-in-group counter for block_idx bookkeeping
+
+  for (k, block) in group.iter().enumerate() {
+    let block_idx = base_block_idx + k;
+    match block {
+      Block::Rule => {
+        let matrix_before = group[..k].iter().any(|b| matches!(b, Block::Matrix { .. }));
+        let matrix_after  = group[k + 1..].iter().any(|b| matches!(b, Block::Matrix { .. }));
+        let text = if !matrix_before {
+          added_top = true;
+          top.clone()
+        } else if !matrix_after {
+          bot.clone()
+        } else {
+          mid.clone()
+        };
+        out.push(VisualLine { block_idx, line_in_block: seq, text, kind: VisualLineKind::Rule });
+        seq += 1;
+      }
+      Block::Matrix { rows } => {
+        if !added_top {
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: seq,
+            text: top.clone(),
+            kind: VisualLineKind::Rule,
+          });
+          seq += 1;
+          added_top = true;
+        }
+        let n_rows = rows.len();
+        for (ri, row) in rows.iter().enumerate() {
+          let mut padded: Vec<String> = row.iter().enumerate()
+            .map(|(j, cell)| {
+              let w = col_widths.get(j).copied().unwrap_or(0);
+              format!("{:<width$}", cell, width = w)
+            })
+            .collect();
+          while padded.len() < ncols {
+            let j = padded.len();
+            padded.push(" ".repeat(col_widths.get(j).copied().unwrap_or(0)));
+          }
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: seq,
+            text: format_data_row(&padded),
+            kind: VisualLineKind::MatrixLine { is_first: ri == 0, is_last: ri == n_rows - 1 },
+          });
+          seq += 1;
+        }
+        if k == n - 1 {
+          out.push(VisualLine {
+            block_idx,
+            line_in_block: seq,
+            text: bot.clone(),
+            kind: VisualLineKind::Rule,
+          });
+        }
+      }
+      _ => {}
+    }
+  }
 }
 
 /// Center `line` (of visual width `block_width`) within `terminal_width`.

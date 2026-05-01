@@ -69,7 +69,7 @@ impl EntriesList {
 
         let title_style = match (self.is_active, highlight_selected) {
           (_, true) => {
-            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme::current().accent).add_modifier(Modifier::BOLD)
           }
           (true, _) => Style::default().add_modifier(Modifier::BOLD),
           (false, _) => Style::reset(),
@@ -87,7 +87,7 @@ impl EntriesList {
           note.updated_at.month(),
           note.updated_at.year()
         );
-        let date_style = Style::default().fg(theme::MUTED);
+        let date_style = Style::default().fg(theme::current().text_dim);
         spans.push(Line::from(Span::styled(date_line, date_style)));
         lines_count += 1;
 
@@ -139,7 +139,7 @@ impl EntriesList {
     let highlight_style = if self.is_active {
       Style::default().add_modifier(Modifier::REVERSED)
     } else {
-      Style::default().add_modifier(Modifier::REVERSED).fg(theme::MUTED)
+      Style::default().add_modifier(Modifier::REVERSED).fg(theme::current().text_dim)
     };
 
     let list =

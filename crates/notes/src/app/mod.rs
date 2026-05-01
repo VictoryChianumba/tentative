@@ -1023,7 +1023,7 @@ impl App {
         Block::default()
           .borders(Borders::ALL)
           .title("─── Preview ───")
-          .border_style(Style::default().fg(theme::BORDER)),
+          .border_style(Style::default().fg(theme::current().border)),
       )
       .wrap(Wrap { trim: false })
       .scroll((self.preview_scroll as u16, 0));

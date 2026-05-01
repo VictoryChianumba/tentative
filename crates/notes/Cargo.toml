@@ -21,3 +21,4 @@ log = "0.4"
 textwrap = "0.16"
 fuzzy-matcher = "0.3"
 dirs = "6"
+ui-theme = { path = "../ui-theme" }

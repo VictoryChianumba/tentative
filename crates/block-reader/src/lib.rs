@@ -14,6 +14,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use state::{Mode, Reader};
 use std::io;
+use ui_theme::Theme;
 
 pub use state::PaperMeta;
 
@@ -21,6 +22,16 @@ pub fn run(
   blocks: Vec<Block>,
   meta: Option<PaperMeta>,
   progress_key: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+  let theme = ui_theme::ThemeId::Dark.theme();
+  run_with_theme(blocks, meta, progress_key, &theme)
+}
+
+pub fn run_with_theme(
+  blocks: Vec<Block>,
+  meta: Option<PaperMeta>,
+  progress_key: Option<String>,
+  theme: &Theme,
 ) -> Result<(), Box<dyn std::error::Error>> {
   enable_raw_mode()?;
   let mut stdout = io::stdout();
@@ -42,7 +53,7 @@ pub fn run(
     reader.bookmarks = bookmarks::load(key).marks;
   }
 
-  let result = event_loop(&mut terminal, &mut reader);
+  let result = event_loop(&mut terminal, &mut reader, theme);
 
   // Persist reading progress and bookmarks on clean exit.
   if let Some(ref key) = progress_key {
@@ -62,9 +73,10 @@ pub fn run(
 fn event_loop(
   terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
   reader: &mut Reader,
+  theme: &Theme,
 ) -> Result<(), Box<dyn std::error::Error>> {
   loop {
-    terminal.draw(|f| render::draw(f, reader))?;
+    terminal.draw(|f| render::draw(f, reader, theme))?;
 
     match event::read()? {
       Event::Key(key) => match reader.mode {

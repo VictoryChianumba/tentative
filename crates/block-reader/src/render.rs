@@ -6,40 +6,28 @@ use ratatui::{
   text::{Line, Span},
   widgets::{Block, Borders, Clear, Paragraph},
 };
+use ui_theme::Theme;
 
 use crate::state::{Mode, Reader, TOC_WIDTH};
 
-// ── Accent palette ────────────────────────────────────────────────────────────
-
-const BABY_BLUE: Color = Color::Rgb(100, 181, 246);
-const ACCENT_DIM: Color = Color::Rgb(70, 130, 180);
-const MATH_COLOR: Color = Color::Rgb(80, 200, 160);
-const TOC_DIM: Color = Color::Rgb(80, 95, 115);
-const MONO_COLOR: Color = Color::Rgb(180, 160, 120);
-const CODE_BG: Color = Color::Rgb(20, 25, 35);
-const CODE_FG: Color = Color::Rgb(160, 200, 180);
-const RULE_COLOR: Color = Color::Rgb(55, 65, 80);
-const HEADER_BG: Color = Color::Rgb(12, 17, 27);
-const VISUAL_SEL: Color = Color::Rgb(40, 65, 105);
-
-pub fn draw(frame: &mut Frame, reader: &Reader) {
+pub fn draw(frame: &mut Frame, reader: &Reader, t: &Theme) {
   let area = frame.area();
   let (header_area, toc_area, content_area, status_area, search_area) =
     split_layout(area, reader);
 
   if let Some(ha) = header_area {
-    draw_header(frame, reader, ha);
+    draw_header(frame, reader, ha, t);
   }
   if let Some(ta) = toc_area {
-    draw_toc(frame, reader, ta);
+    draw_toc(frame, reader, ta, t);
   }
-  draw_content(frame, reader, content_area);
-  draw_status(frame, reader, status_area);
+  draw_content(frame, reader, content_area, t);
+  draw_status(frame, reader, status_area, t);
   if reader.mode == Mode::Search {
-    draw_search_bar(frame, reader, search_area.unwrap());
+    draw_search_bar(frame, reader, search_area.unwrap(), t);
   }
   if reader.help_visible {
-    draw_help_overlay(frame, area);
+    draw_help_overlay(frame, area, t);
   }
 }
 
@@ -89,7 +77,7 @@ fn split_layout(
   (header_area, toc_area, content_area, status_area, search_area)
 }
 
-fn draw_header(frame: &mut Frame, reader: &Reader, area: Rect) {
+fn draw_header(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let Some(meta) = &reader.meta else { return };
   let w = area.width as usize;
   let title = &meta.title;
@@ -97,11 +85,11 @@ fn draw_header(frame: &mut Frame, reader: &Reader, area: Rect) {
   let raw = format!(" {}{}{}", title, sep, meta.authors);
   let truncated = toc_trunc(&raw, w);
   let header = Paragraph::new(truncated)
-    .style(Style::default().bg(HEADER_BG).fg(BABY_BLUE));
+    .style(Style::default().bg(t.bg_panel).fg(t.accent));
   frame.render_widget(header, area);
 }
 
-fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect) {
+fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let ch = area.height as usize;
   let total = reader.total_lines();
   let q = reader.search_query.to_lowercase();
@@ -126,7 +114,7 @@ fn draw_content(frame: &mut Frame, reader: &Reader, area: Rect) {
       let is_bookmarked = reader.bookmarks.binary_search(&vl_idx).is_ok();
       let is_selected = visual_range.map_or(false, |(lo, hi)| vl_idx >= lo && vl_idx <= hi);
       let cursor_col = if is_cursor { Some(reader.cursor_x) } else { None };
-      render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx)
+      render_visual_line(vl, is_cursor, is_bookmarked, is_selected, cursor_col, &q, &reader.search_matches, vl_idx, t)
     })
     .collect();
 
@@ -143,12 +131,13 @@ fn render_visual_line<'a>(
   query: &str,
   matches: &[usize],
   vl_idx: usize,
+  t: &Theme,
 ) -> Line<'a> {
   let text = &vl.text;
   let bg = if is_selected {
-    VISUAL_SEL
+    t.bg_selection
   } else if is_bookmarked {
-    Color::Rgb(55, 45, 15)
+    t.bookmark_bg
   } else {
     Color::Reset
   };
@@ -160,7 +149,7 @@ fn render_visual_line<'a>(
       if cursor_col.is_some() {
         Line::from(vec![Span::styled(
           " ",
-          Style::default().bg(Color::White).fg(Color::Black),
+          Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
         )])
       } else {
         Line::styled("", base_style)
@@ -169,39 +158,38 @@ fn render_visual_line<'a>(
 
     VisualLineKind::Prose => {
       if let Some(col) = cursor_col {
-        apply_char_cursor(text, col, bg)
+        apply_char_cursor(text, col, bg, t)
       } else if !query.is_empty() && matches.contains(&vl_idx) {
-        highlight_query(text, query, bg)
+        highlight_query(text, query, bg, t)
       } else {
         Line::styled(text.clone(), base_style)
       }
     }
 
     VisualLineKind::MathLine { .. } => {
-      Line::styled(text.clone(), base_style.fg(MATH_COLOR))
+      Line::styled(text.clone(), base_style.fg(t.math))
     }
 
     VisualLineKind::Header(level) => {
       let (fg, modifier) = match level {
-        1 => (BABY_BLUE, Modifier::BOLD),
-        2 => (ACCENT_DIM, Modifier::BOLD),
-        _ => (ACCENT_DIM, Modifier::empty()),
+        1 => (t.accent, Modifier::BOLD),
+        2 => (t.header, Modifier::BOLD),
+        _ => (t.header, Modifier::empty()),
       };
       if let Some(col) = cursor_col {
-        apply_char_cursor(text, col, bg)
+        apply_char_cursor(text, col, bg, t)
       } else {
         Line::styled(text.clone(), base_style.fg(fg).add_modifier(modifier))
       }
     }
 
-    VisualLineKind::MatrixLine { is_first, is_last } => {
-      let prefix = if *is_first { "┌ " } else if *is_last { "└ " } else { "│ " };
-      Line::styled(format!("{}{}", prefix, text), base_style.fg(MATH_COLOR))
+    VisualLineKind::MatrixLine { .. } => {
+      Line::styled(text.clone(), base_style.fg(t.math))
     }
 
     VisualLineKind::StyledProse(spans) => {
       if !query.is_empty() && matches.contains(&vl_idx) {
-        highlight_spans(spans, query, bg)
+        highlight_spans(spans, query, bg, t)
       } else {
         let ratatui_spans: Vec<Span> = spans.iter().map(|s| {
           let mut style = base_style;
@@ -209,7 +197,7 @@ fn render_visual_line<'a>(
           if s.italic      { style = style.add_modifier(Modifier::ITALIC); }
           if s.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
           if s.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
-          if s.monospace   { style = style.fg(MONO_COLOR); }
+          if s.monospace   { style = style.fg(t.mono); }
           if let Some((r, g, b)) = s.color { style = style.fg(Color::Rgb(r, g, b)); }
           if let Some(url) = &s.url {
             // OSC 8 clickable link: terminals that don't support it show plain text.
@@ -226,9 +214,9 @@ fn render_visual_line<'a>(
     VisualLineKind::ListItem { .. } => {
       // text already contains indent + marker prefix from build_visual_lines.
       if let Some(col) = cursor_col {
-        apply_char_cursor(text, col, bg)
+        apply_char_cursor(text, col, bg, t)
       } else if !query.is_empty() && matches.contains(&vl_idx) {
-        highlight_query(text, query, bg)
+        highlight_query(text, query, bg, t)
       } else {
         Line::styled(text.clone(), base_style)
       }
@@ -238,19 +226,19 @@ fn render_visual_line<'a>(
       let prefix = if *is_first { "╔ " } else if *is_last { "╚ " } else { "║ " };
       Line::styled(
         format!("{}{}", prefix, text),
-        Style::default().bg(CODE_BG).fg(CODE_FG),
+        Style::default().bg(t.bg_code).fg(t.text),
       )
     }
 
     VisualLineKind::Rule => {
-      Line::styled(text.clone(), Style::default().fg(RULE_COLOR))
+      Line::styled(text.clone(), Style::default().fg(t.rule))
     }
 
     VisualLineKind::Quote { .. } => {
       Line::styled(
         format!("    {}", text),
         base_style
-          .fg(Color::Rgb(140, 150, 170))
+          .fg(t.text_dim)
           .add_modifier(Modifier::ITALIC),
       )
     }
@@ -259,11 +247,11 @@ fn render_visual_line<'a>(
 
 /// Render a line with a single character highlighted at `byte_col` (the cursor position).
 /// Used to show cursor_x within the current line in Normal mode.
-fn apply_char_cursor(text: &str, byte_col: usize, bg: Color) -> Line<'static> {
+fn apply_char_cursor(text: &str, byte_col: usize, bg: Color, t: &Theme) -> Line<'static> {
   if text.is_empty() {
     return Line::from(vec![Span::styled(
       " ",
-      Style::default().bg(Color::White).fg(Color::Black),
+      Style::default().bg(t.cursor_bg).fg(t.cursor_fg),
     )]);
   }
   // Snap to nearest valid char boundary at or before byte_col.
@@ -279,14 +267,14 @@ fn apply_char_cursor(text: &str, byte_col: usize, bg: Color) -> Line<'static> {
   if !before.is_empty() {
     spans.push(Span::styled(before.to_string(), Style::default().bg(bg)));
   }
-  spans.push(Span::styled(cur, Style::default().bg(Color::White).fg(Color::Black)));
+  spans.push(Span::styled(cur, Style::default().bg(t.cursor_bg).fg(t.cursor_fg)));
   if !after.is_empty() {
     spans.push(Span::styled(after, Style::default().bg(bg)));
   }
   Line::from(spans)
 }
 
-fn highlight_query(text: &str, query: &str, bg: Color) -> Line<'static> {
+fn highlight_query(text: &str, query: &str, bg: Color, t: &Theme) -> Line<'static> {
   let lower = text.to_lowercase();
   let mut spans: Vec<Span<'static>> = Vec::new();
   let mut pos = 0;
@@ -299,7 +287,7 @@ fn highlight_query(text: &str, query: &str, bg: Color) -> Line<'static> {
     }
     spans.push(Span::styled(
       text[abs..abs + ql].to_string(),
-      Style::default().bg(Color::Yellow).fg(Color::Black),
+      Style::default().bg(t.search_match_bg).fg(t.search_match_fg),
     ));
     pos = abs + ql;
   }
@@ -313,7 +301,7 @@ fn highlight_query(text: &str, query: &str, bg: Color) -> Line<'static> {
 /// Render a StyledProse line with search term highlighting.
 /// Each span is rendered with its own style; the matching substring is
 /// overridden with a yellow-bg highlight wherever it appears.
-fn highlight_spans(spans: &[doc_model::InlineSpan], query: &str, bg: Color) -> Line<'static> {
+fn highlight_spans(spans: &[doc_model::InlineSpan], query: &str, bg: Color, t: &Theme) -> Line<'static> {
   let mut ratatui_spans: Vec<Span<'static>> = Vec::new();
 
   for s in spans {
@@ -322,7 +310,7 @@ fn highlight_spans(spans: &[doc_model::InlineSpan], query: &str, bg: Color) -> L
     if s.italic      { style = style.add_modifier(Modifier::ITALIC); }
     if s.underline   { style = style.add_modifier(Modifier::UNDERLINED); }
     if s.strikethrough { style = style.add_modifier(Modifier::CROSSED_OUT); }
-    if s.monospace   { style = style.fg(MONO_COLOR); }
+    if s.monospace   { style = style.fg(t.mono); }
     if let Some((r, g, b)) = s.color { style = style.fg(Color::Rgb(r, g, b)); }
 
     let lower = s.text.to_lowercase();
@@ -336,7 +324,7 @@ fn highlight_spans(spans: &[doc_model::InlineSpan], query: &str, bg: Color) -> L
       }
       ratatui_spans.push(Span::styled(
         s.text[abs..abs + ql].to_string(),
-        Style::default().bg(Color::Yellow).fg(Color::Black),
+        Style::default().bg(t.search_match_bg).fg(t.search_match_fg),
       ));
       pos = abs + ql;
     }
@@ -348,7 +336,7 @@ fn highlight_spans(spans: &[doc_model::InlineSpan], query: &str, bg: Color) -> L
   Line::from(ratatui_spans)
 }
 
-fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect) {
+fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let panel_h = area.height as usize;
   // 1 char right border + 1 char leading space = 2 chars overhead
   let inner_w = area.width.saturating_sub(2) as usize;
@@ -377,9 +365,9 @@ fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect) {
       let label = format!(" {}{}", " ".repeat(indent), toc_trunc(text, avail));
       let is_current = cur_sec.map_or(false, |c| c == sec_idx);
       if is_current {
-        Line::styled(label, Style::default().fg(BABY_BLUE).add_modifier(Modifier::BOLD))
+        Line::styled(label, Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
       } else {
-        Line::styled(label, Style::default().fg(TOC_DIM))
+        Line::styled(label, Style::default().fg(t.toc_dim))
       }
     })
     .collect();
@@ -387,7 +375,7 @@ fn draw_toc(frame: &mut Frame, reader: &Reader, area: Rect) {
   let widget = Paragraph::new(lines).block(
     Block::default()
       .borders(Borders::RIGHT)
-      .border_style(Style::default().fg(Color::DarkGray)),
+      .border_style(Style::default().fg(t.text_dim)),
   );
   frame.render_widget(widget, area);
 }
@@ -407,7 +395,7 @@ fn toc_trunc(s: &str, max: usize) -> String {
   }
 }
 
-fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect) {
+fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let cur = reader.current_line() + 1;
   let tot = reader.total_lines();
   let pct = if tot == 0 { 0 } else { cur * 100 / tot };
@@ -429,28 +417,28 @@ fn draw_status(frame: &mut Frame, reader: &Reader, area: Rect) {
   };
   let text = format!(" {cur}/{tot}  {pct}%{match_info}{mode_str}{count_str}");
   let status = Paragraph::new(text)
-    .style(Style::default().bg(Color::Rgb(25, 35, 50)).fg(Color::DarkGray));
+    .style(Style::default().bg(t.bg_input).fg(t.text_dim));
   frame.render_widget(status, area);
 }
 
-fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect) {
+fn draw_search_bar(frame: &mut Frame, reader: &Reader, area: Rect, t: &Theme) {
   let text = format!("/{}", reader.search_query);
   let bar = Paragraph::new(text)
-    .style(Style::default().bg(Color::Rgb(25, 35, 50)).fg(Color::White));
+    .style(Style::default().bg(t.bg_input).fg(t.cursor_bg));
   frame.render_widget(bar, area);
 }
 
-fn draw_help_overlay(frame: &mut Frame, area: Rect) {
+fn draw_help_overlay(frame: &mut Frame, area: Rect, t: &Theme) {
   const W: u16 = 64;
   const H: u16 = 22;
   let x = area.x + area.width.saturating_sub(W) / 2;
   let y = area.y + area.height.saturating_sub(H) / 2;
   let popup = Rect { x, y, width: W.min(area.width), height: H.min(area.height) };
 
-  let help_bg = Color::Rgb(18, 22, 34);
-  let key_fg = Color::Rgb(100, 181, 246);
-  let dim_fg = Color::Rgb(120, 130, 150);
-  let sec_fg = Color::Rgb(80, 95, 115);
+  let help_bg = t.bg_popup;
+  let key_fg = t.accent;
+  let dim_fg = t.text_dim;
+  let sec_fg = t.header;
 
   let rows: &[(&str, &str, &str, &str)] = &[
     ("j / k",         "scroll down / up",       "] / [",    "next / prev section"),
@@ -509,7 +497,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     .block(
       Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(t.text_dim))
         .style(Style::default().bg(help_bg)),
     );
   frame.render_widget(widget, popup);

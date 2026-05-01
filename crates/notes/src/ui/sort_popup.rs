@@ -84,7 +84,7 @@ impl SortPopup {
 
     let block = Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER))
+      .border_style(Style::default().fg(theme::current().border))
       .title("─── Sort ───");
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
@@ -127,7 +127,7 @@ impl SortPopup {
     let order = Paragraph::new(order_text).alignment(Alignment::Center).block(
       Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER))
+        .border_style(Style::default().fg(theme::current().border))
         .title("Sort Order"),
     );
 
@@ -142,7 +142,7 @@ impl SortPopup {
       .collect();
 
     let block_style = match self.active_control {
-      SortControl::AvailableList => Style::default().fg(theme::ACCENT),
+      SortControl::AvailableList => Style::default().fg(theme::current().accent),
       _ => Style::default(),
     };
 
@@ -171,7 +171,7 @@ impl SortPopup {
 
     let block_style = match (self.is_valid, self.active_control) {
       (false, _) => Style::default().fg(Color::Red),
-      (true, SortControl::AppliedList) => Style::default().fg(theme::ACCENT),
+      (true, SortControl::AppliedList) => Style::default().fg(theme::current().accent),
       _ => Style::default(),
     };
 
@@ -208,7 +208,7 @@ impl SortPopup {
     if is_focused {
       Style::default().add_modifier(Modifier::REVERSED)
     } else {
-      Style::default().fg(theme::MUTED)
+      Style::default().fg(theme::current().text_dim)
     }
   }
 

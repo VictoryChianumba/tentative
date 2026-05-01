@@ -131,7 +131,7 @@ impl HelpPopup {
     let block = Block::default()
       .title("─── Help ───")
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER));
+      .border_style(Style::default().fg(theme::current().border));
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
 
@@ -148,7 +148,7 @@ impl HelpPopup {
       .block(
         Block::default()
           .borders(Borders::ALL)
-          .border_style(Style::default().fg(theme::BORDER))
+          .border_style(Style::default().fg(theme::current().border))
           .title("Tabs"),
       )
       .select(self.selected_tab.get_index())
@@ -278,7 +278,7 @@ fn render_keybindings<T: KeybindingsTable>(
     Block::default()
       .title(table.get_title().to_owned())
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER)),
+      .border_style(Style::default().fg(theme::current().border)),
   )
   .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -330,7 +330,7 @@ pub fn render_editor_hint(frame: &mut Frame, area: Rect) {
       Block::default()
         .title("Editor Keybindings")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER)),
+        .border_style(Style::default().fg(theme::current().border)),
     )
     .wrap(Wrap { trim: false });
 

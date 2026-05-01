@@ -60,15 +60,15 @@ impl MsgBox {
 
     let (title, text_color, text) = match &self.msg_type {
       MsgBoxType::Error(text) => ("─── Error ───", Color::Red, text),
-      MsgBoxType::Warning(text) => ("─── Warning ───", theme::WARN, text),
-      MsgBoxType::Info(text) => ("─── Info ───", theme::ACCENT, text),
-      MsgBoxType::Question(text) => ("─── ? ───", theme::TEXT, text),
+      MsgBoxType::Warning(text) => ("─── Warning ───", theme::current().warning, text),
+      MsgBoxType::Info(text) => ("─── Info ───", theme::current().accent, text),
+      MsgBoxType::Question(text) => ("─── ? ───", theme::current().text, text),
     };
 
     let border = Block::default()
       .borders(Borders::ALL)
       .title(title)
-      .border_style(Style::default().fg(theme::BORDER));
+      .border_style(Style::default().fg(theme::current().border));
 
     frame.render_widget(Clear, area);
     frame.render_widget(border, area);

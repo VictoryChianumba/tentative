@@ -105,7 +105,7 @@ impl NotePopup<'_> {
 
     let block = Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER))
+      .border_style(Style::default().fg(theme::current().border))
       .title(if self.is_edit_note {
         "─── Edit note ───"
       } else {
@@ -134,11 +134,11 @@ impl NotePopup<'_> {
     self.url_txt.set_cursor_line_style(Style::default());
     self.tags_txt.set_cursor_line_style(Style::default());
 
-    let active_block_style = Style::default().fg(theme::ACCENT);
+    let active_block_style = Style::default().fg(theme::current().accent);
     let reset_style = Style::reset();
     let invalid_block_style = Style::default().fg(Color::Red);
     let active_cursor_style =
-      Style::default().fg(theme::ACCENT).bg(theme::ACCENT);
+      Style::default().fg(theme::current().accent).bg(theme::current().accent);
     let deactivate_cursor_style = Style::default().bg(Color::Reset);
     let invalid_cursor_style = Style::default().fg(Color::Red);
 

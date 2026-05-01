@@ -480,7 +480,10 @@ fn process_body(
             flush_builder(&mut builder, &mut list_item_pending, &mut out);
             for tab_env in TABULAR_ENVS {
               if let Some(tab_body) = extract_env(&body_text, tab_env) {
-                out.extend(parse_tabular(&tab_body));
+                // Pre-expand zero-arg custom macros so that e.g. \dmodel → d_{\text{model}}
+                // before cell splitting and math rendering.
+                let expanded_body = expand_zero_arg_macros(&tab_body, macros);
+                out.extend(parse_tabular(&expanded_body));
                 break;
               }
             }
@@ -1589,6 +1592,30 @@ fn skip_braced_args(mut s: &str) -> &str {
   }
 }
 
+/// Split a tabular row on `&` while respecting `\&` (escaped ampersand = literal `&` in content).
+fn split_tabular_cells(row: &str) -> Vec<String> {
+  let mut cells = Vec::new();
+  let mut current = String::new();
+  let chars: Vec<char> = row.chars().collect();
+  let mut i = 0;
+  while i < chars.len() {
+    if chars[i] == '\\' && i + 1 < chars.len() {
+      current.push(chars[i]);
+      current.push(chars[i + 1]);
+      i += 2;
+    } else if chars[i] == '&' {
+      cells.push(current.clone());
+      current.clear();
+      i += 1;
+    } else {
+      current.push(chars[i]);
+      i += 1;
+    }
+  }
+  cells.push(current);
+  cells
+}
+
 /// Parse a raw tabular body into a `Block::Matrix`.
 fn parse_tabular(body: &str) -> Vec<Block> {
   let body = body.trim_start();
@@ -1617,8 +1644,8 @@ fn parse_tabular(body: &str) -> Vec<Block> {
     if trimmed_data.is_empty() {
       continue;
     }
-    let cells: Vec<String> = trimmed_data
-      .split('&')
+    let cells: Vec<String> = split_tabular_cells(trimmed_data)
+      .into_iter()
       .map(|cell| clean_inline(cell.trim().to_string()))
       .collect();
     let has_content = cells.iter().any(|c| !c.is_empty());
@@ -1730,6 +1757,31 @@ fn read_until_double_dollar(text: &[char], start: usize) -> (String, usize) {
   (content, i - start)
 }
 
+/// Expand zero-argument custom macros in `text` using the document macro map.
+/// This handles macros like `\dmodel` → `d_{\text{model}}` defined via `\newcommand`.
+/// One-arg or multi-arg macros are left untouched (they need argument context).
+fn expand_zero_arg_macros(text: &str, macros: &HashMap<String, (usize, String)>) -> String {
+  let chars: Vec<char> = text.chars().collect();
+  let mut out = String::new();
+  let mut i = 0;
+  while i < chars.len() {
+    if chars[i] == '\\' && i + 1 < chars.len() {
+      let (cmd, consumed) = read_command(&chars, i + 1);
+      if let Some((0, template)) = macros.get(&cmd) {
+        out.push_str(template);
+        i += 1 + consumed;
+      } else {
+        out.push('\\');
+        i += 1;
+      }
+    } else {
+      out.push(chars[i]);
+      i += 1;
+    }
+  }
+  out
+}
+
 fn extract_env(body: &str, env: &str) -> Option<String> {
   let begin = format!(r"\begin{{{env}}}");
   let end = format!(r"\end{{{env}}}");
@@ -1762,6 +1814,22 @@ fn clean_inline(s: String) -> String {
       i += 1 + consumed;
       match cmd.as_str() {
         "thanks" | "footnote" | "footnotemark" => {
+          if i < chars.len() && chars[i] == '{' {
+            let (_, skip) = read_braced_arg(&chars, i);
+            i += skip;
+          }
+        }
+        // citation commands: discard the key arg(s), emit nothing
+        "cite" | "citet" | "citep" | "citealp" | "citealt"
+        | "citeauthor" | "citeyear" | "citenum" | "citeyearpar"
+        | "shortcite" | "fullcite" | "autocite" | "parencite"
+        | "textcite" | "footcite" => {
+          // Skip optional [note] arg then the required {keys} arg
+          let t = &chars[i..];
+          if !t.is_empty() && t[0] == '[' {
+            let end = t.iter().position(|&c| c == ']').unwrap_or(0);
+            i += end + 1;
+          }
           if i < chars.len() && chars[i] == '{' {
             let (_, skip) = read_braced_arg(&chars, i);
             i += skip;
@@ -1812,6 +1880,37 @@ fn clean_inline(s: String) -> String {
       }
     } else if chars[i] == '~' {
       out.push(' ');
+      i += 1;
+    } else if chars[i] == '$' {
+      // Inline math: render to Unicode via the math pipeline.
+      i += 1;
+      let mut math = String::new();
+      while i < chars.len() && chars[i] != '$' {
+        math.push(chars[i]);
+        i += 1;
+      }
+      if i < chars.len() { i += 1; } // consume closing $
+      if !math.is_empty() {
+        let rendered = render(MathInput::Latex(math.trim()));
+        // Collapse any multi-line math output to a single line for inline contexts.
+        let flat = rendered.lines()
+          .map(|l| l.trim())
+          .filter(|l| !l.is_empty())
+          .collect::<Vec<_>>()
+          .join(" ");
+        if flat.is_empty() {
+          out.push_str(math.trim());
+        } else {
+          out.push_str(&flat);
+        }
+      }
+    } else if chars[i] == '{' {
+      // bare braced group: strip braces, recurse on content
+      let (content, skip) = read_braced_arg(&chars, i);
+      i += skip;
+      out.push_str(&clean_inline(content));
+    } else if chars[i] == '}' {
+      // orphaned closing brace: skip
       i += 1;
     } else {
       out.push(chars[i]);

@@ -1,10 +1,12 @@
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
+use ui_theme::Theme;
 
-use super::{App, HandleInputReturn};
+use super::{theme, App, HandleInputReturn};
 
 /// Render the notes UI into `area` within the caller's frame.
-pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, t: &Theme) {
+  theme::set_current(t);
   app.draw(frame, area);
 }
 

@@ -5,7 +5,7 @@ use ratatui::{
   Frame,
   layout::{Constraint, Direction, Layout, Rect},
   prelude::Margin,
-  style::{Color, Modifier, Style},
+  style::{Modifier, Style},
   symbols,
   widgets::{
     Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -389,12 +389,12 @@ impl<'a> NoteEditor<'a> {
     // Mode indicator line.
     let (mode_label, mode_color) = if self.is_active {
       match self.mode {
-        EditorMode::Normal => ("-- NORMAL --", theme::MUTED),
-        EditorMode::Insert => ("-- INSERT --", theme::WARN),
-        EditorMode::Visual => ("-- VISUAL --", theme::SUCCESS),
+        EditorMode::Normal => ("-- NORMAL --", theme::current().text_dim),
+        EditorMode::Insert => ("-- INSERT --", theme::current().warning),
+        EditorMode::Visual => ("-- VISUAL --", theme::current().success),
       }
     } else {
-      ("", theme::MUTED)
+      ("", theme::current().text_dim)
     };
     let unsaved = if self.has_unsaved { "  [+]" } else { "" };
     frame.render_widget(
@@ -422,7 +422,7 @@ impl<'a> NoteEditor<'a> {
     self.text_area.set_style(Style::reset());
     self
       .text_area
-      .set_selection_style(Style::default().bg(theme::ACCENT).fg(Color::Black));
+      .set_selection_style(Style::default().bg(theme::current().accent).fg(theme::current().text_on_accent));
 
     frame.render_widget(&self.text_area, text_rect);
 

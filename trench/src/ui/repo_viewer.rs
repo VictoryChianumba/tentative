@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::{App, RepoFileKind, RepoPane};
 use crate::github::NodeType;
-use crate::theme;
+use ui_theme::Theme;
 use crate::ui::repo_markdown;
 
 pub fn draw_repo_viewer(frame: &mut Frame, app: &mut App) {
@@ -23,14 +23,15 @@ pub fn draw_repo_viewer(frame: &mut Frame, app: &mut App) {
     ])
     .split(area);
 
-  draw_header(frame, app, rows[0]);
-  draw_main(frame, app, rows[1]);
-  draw_help(frame, app, rows[2]);
+  let t = app.active_theme.theme();
+  draw_header(frame, app, rows[0], &t);
+  draw_main(frame, app, rows[1], &t);
+  draw_help(frame, app, rows[2], &t);
 }
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_header(frame: &mut Frame, app: &App, area: Rect, t: &Theme) {
   let ctx = match &app.repo_context {
     Some(c) => c,
     None => return,
@@ -50,22 +51,22 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     Span::raw(" "),
     Span::styled(
       truncate(&repo, width.saturating_sub(branch.len() + 1)),
-      theme::style_accent(),
+      t.style_accent(),
     ),
-    Span::styled(branch, theme::style_dim()),
+    Span::styled(branch, t.style_dim()),
   ]);
   frame.render_widget(Paragraph::new(header), rows[0]);
 
   let sep = "─".repeat(area.width as usize);
   frame.render_widget(
-    Paragraph::new(Span::styled(sep, theme::style_border())),
+    Paragraph::new(Span::styled(sep, t.style_border())),
     rows[1],
   );
 }
 
 // ── Main (tree + file) ───────────────────────────────────────────────────────
 
-fn draw_main(frame: &mut Frame, app: &mut App, area: Rect) {
+fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, t: &Theme) {
   let ctx = match app.repo_context.as_mut() {
     Some(c) => c,
     None => return,
@@ -76,23 +77,23 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect) {
       Line::from(""),
       Line::from(Span::styled(
         "  GitHub token required.",
-        Style::default().fg(theme::WARNING).add_modifier(Modifier::BOLD),
+        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
       )),
       Line::from(""),
       Line::from(Span::styled(
         "  Set github_token in ~/.config/trench/config.json",
-        theme::style_dim(),
+        t.style_dim(),
       )),
       Line::from(""),
       Line::from(Span::styled(
         "  Example:  { \"github_token\": \"ghp_...\" }",
-        theme::style_dim(),
+        t.style_dim(),
       )),
     ])
     .block(
       Block::default()
         .borders(Borders::ALL)
-        .border_style(theme::style_border()),
+        .border_style(t.style_border()),
     );
     frame.render_widget(msg, area);
     return;
@@ -117,10 +118,11 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect) {
     ctx.pane_focus == RepoPane::Tree,
     &file_title,
     ctx.pane_focus == RepoPane::File,
+    t,
   );
 
-  draw_tree_pane(frame, ctx, tree_rect);
-  draw_file_pane(frame, ctx, file_rect);
+  draw_tree_pane(frame, ctx, tree_rect, t);
+  draw_file_pane(frame, ctx, file_rect, t);
 }
 
 // ── Tree pane ────────────────────────────────────────────────────────────────
@@ -129,19 +131,20 @@ fn draw_tree_pane(
   frame: &mut Frame,
   ctx: &crate::app::RepoContext,
   area: Rect,
+  t: &Theme,
 ) {
   // Show status message inline in the tree pane.
   if let Some(ref msg) = ctx.status_message {
     let p = Paragraph::new(Span::styled(
       truncate(msg, area.width as usize),
-      Style::default().fg(theme::WARNING),
+      Style::default().fg(t.warning),
     ));
     frame.render_widget(p, area);
     return;
   }
 
   if ctx.tree_nodes.is_empty() {
-    let p = Paragraph::new("  (empty)").style(theme::style_dim());
+    let p = Paragraph::new("  (empty)").style(t.style_dim());
     frame.render_widget(p, area);
     return;
   }
@@ -170,12 +173,12 @@ fn draw_tree_pane(
       if i == ctx.tree_cursor {
         Line::from(Span::styled(
           text,
-          theme::style_selection().add_modifier(Modifier::BOLD),
+          t.style_selection().add_modifier(Modifier::BOLD),
         ))
       } else {
         let col = match node.node_type {
-          NodeType::Dir => theme::ACCENT,
-          NodeType::File => theme::TEXT,
+          NodeType::Dir => t.accent,
+          NodeType::File => t.text,
         };
         Line::from(Span::styled(text, Style::default().fg(col)))
       }
@@ -192,11 +195,12 @@ fn draw_file_pane(
   frame: &mut Frame,
   ctx: &mut crate::app::RepoContext,
   area: Rect,
+  t: &Theme,
 ) {
   if ctx.file_lines.is_empty() {
     let p =
       Paragraph::new("  Navigate the tree and press enter to open a file.")
-        .style(theme::style_dim());
+        .style(t.style_dim());
     frame.render_widget(p, area);
     return;
   }
@@ -239,7 +243,7 @@ fn draw_file_pane(
       .map(|(i, spans)| {
         let mut line_spans = vec![Span::styled(
           format!("{:>line_num_w$} ", i + 1),
-          theme::style_dim(),
+          t.style_dim(),
         )];
         let content: String =
           spans.iter().map(|(_, _, _, t)| t.as_str()).collect();
@@ -284,7 +288,7 @@ fn draw_file_pane(
       .map(|(i, line)| {
         let sliced = apply_h_offset(line, h_off, render_w);
         Line::from(vec![
-          Span::styled(format!("{:>line_num_w$} ", i + 1), theme::style_dim()),
+          Span::styled(format!("{:>line_num_w$} ", i + 1), t.style_dim()),
           Span::raw(sliced),
         ])
       })
@@ -304,7 +308,7 @@ fn draw_file_pane(
       Rect { x, y: area.y, width: indicator.len() as u16 + 1, height: 1 };
     let p = Paragraph::new(Span::styled(
       indicator,
-      Style::default().fg(theme::WARNING),
+      Style::default().fg(t.warning),
     ));
     frame.render_widget(p, indicator_area);
   }
@@ -318,8 +322,9 @@ fn draw_repo_split_box(
   tree_focused: bool,
   file_title: &str,
   file_focused: bool,
+  t: &Theme,
 ) -> (Rect, Rect) {
-  let border_style = theme::style_border();
+  let border_style = t.style_border();
 
   frame.render_widget(
     Block::default().borders(Borders::ALL).border_style(border_style),
@@ -358,8 +363,8 @@ fn draw_repo_split_box(
     );
   }
 
-  draw_split_title(frame, area.x + 1, area.y, tree_w, tree_title, tree_focused);
-  draw_split_title(frame, div_x + 1, area.y, file_w, file_title, file_focused);
+  draw_split_title(frame, area.x + 1, area.y, tree_w, tree_title, tree_focused, t);
+  draw_split_title(frame, div_x + 1, area.y, file_w, file_title, file_focused, t);
 
   let tree_rect =
     Rect { x: inner.x, y: inner.y, width: tree_w, height: inner.height };
@@ -367,10 +372,10 @@ fn draw_repo_split_box(
     Rect { x: div_x + 1, y: inner.y, width: file_w, height: inner.height };
 
   if tree_focused {
-    draw_active_pane_outline(frame, area, tree_rect);
+    draw_active_pane_outline(frame, area, tree_rect, t);
   }
   if file_focused {
-    draw_active_pane_outline(frame, area, file_rect);
+    draw_active_pane_outline(frame, area, file_rect, t);
   }
 
   (tree_rect, file_rect)
@@ -383,13 +388,14 @@ fn draw_split_title(
   width: u16,
   title: &str,
   focused: bool,
+  t: &Theme,
 ) {
   if width == 0 {
     return;
   }
 
   let label = format!(" {} ", truncate(title.trim(), width as usize));
-  let style = if focused { theme::style_header() } else { theme::style_dim() };
+  let style = if focused { t.style_header() } else { t.style_dim() };
   frame.render_widget(
     Paragraph::new(Span::styled(truncate(&label, width as usize), style)),
     Rect { x, y, width, height: 1 },
@@ -400,6 +406,7 @@ fn draw_active_pane_outline(
   frame: &mut Frame,
   outer_area: Rect,
   pane_rect: Rect,
+  t: &Theme,
 ) {
   if pane_rect.width == 0 || pane_rect.height == 0 {
     return;
@@ -421,7 +428,7 @@ fn draw_active_pane_outline(
   frame.render_widget(
     Block::default()
       .borders(Borders::ALL)
-      .border_style(theme::style_border_active()),
+      .border_style(t.style_border_active()),
     outline,
   );
 }
@@ -484,7 +491,7 @@ fn slice_char_range(
 
 // ── Help bar ─────────────────────────────────────────────────────────────────
 
-fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_help(frame: &mut Frame, app: &App, area: Rect, t: &Theme) {
   let ctx = match &app.repo_context {
     Some(c) => c,
     None => return,
@@ -524,7 +531,7 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     }
   };
 
-  let p = Paragraph::new(help).style(theme::style_dim());
+  let p = Paragraph::new(help).style(t.style_dim());
   frame.render_widget(p, area);
 }
 

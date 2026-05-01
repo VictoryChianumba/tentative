@@ -100,7 +100,7 @@ impl FilterPopup<'_> {
 
     let block = Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER))
+      .border_style(Style::default().fg(theme::current().border))
       .title("─── Filter ───");
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
@@ -148,7 +148,7 @@ impl FilterPopup<'_> {
       Paragraph::new(relation_text).alignment(Alignment::Center).block(
         Block::default()
           .borders(Borders::ALL)
-          .border_style(Style::default().fg(theme::BORDER))
+          .border_style(Style::default().fg(theme::current().border))
           .title("Matching Logic"),
       );
 
@@ -162,7 +162,7 @@ impl FilterPopup<'_> {
     content_area: Rect,
   ) {
     let active_cursor_style: Style =
-      Style::default().fg(theme::ACCENT).bg(theme::ACCENT);
+      Style::default().fg(theme::current().accent).bg(theme::current().accent);
     let deactivate_cursor_style = Style::default().bg(Color::Reset);
 
     let mut title_txt_block =
@@ -175,13 +175,13 @@ impl FilterPopup<'_> {
         self.title_txt.set_cursor_style(active_cursor_style);
         self.content_txt.set_cursor_style(deactivate_cursor_style);
         title_txt_block =
-          title_txt_block.style(Style::default().fg(theme::ACCENT));
+          title_txt_block.style(Style::default().fg(theme::current().accent));
       }
       FilterControl::ContentTxt => {
         self.title_txt.set_cursor_style(deactivate_cursor_style);
         self.content_txt.set_cursor_style(active_cursor_style);
         content_txt_block =
-          content_txt_block.style(Style::default().fg(theme::ACCENT));
+          content_txt_block.style(Style::default().fg(theme::current().accent));
       }
       FilterControl::TagsList => {
         self.title_txt.set_cursor_style(deactivate_cursor_style);
@@ -221,7 +221,7 @@ impl FilterPopup<'_> {
       FilterControl::TagsList => {
         Style::default().add_modifier(Modifier::REVERSED)
       }
-      _ => Style::default().fg(theme::MUTED),
+      _ => Style::default().fg(theme::current().text_dim),
     };
 
     let list = List::new(items)
@@ -245,7 +245,7 @@ impl FilterPopup<'_> {
 
   fn get_list_block<'b>(&self) -> Block<'b> {
     let style = match self.active_control {
-      FilterControl::TagsList => Style::default().fg(theme::ACCENT),
+      FilterControl::TagsList => Style::default().fg(theme::current().accent),
       _ => Style::default(),
     };
     Block::default().borders(Borders::ALL).title("Tags").style(style)

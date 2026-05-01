@@ -6,10 +6,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
   Frame,
   layout::{Alignment, Constraint, Direction, Layout, Rect},
-  style::{Color, Modifier, Style},
+  style::{Modifier, Style},
   text::{Line, Span, Text},
   widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
+use ui_theme::Theme;
 
 use crate::{
   ChatIndex, ChatMessage, ChatSession, ChatSessionMeta, Role,
@@ -50,19 +51,6 @@ pub enum ChatInputMode {
   Insert,
   Normal,
 }
-
-const CHAT_BG: Color = Color::Black;
-const CHAT_PANEL_BG: Color = Color::Black;
-const CHAT_INPUT_BG: Color = Color::Rgb(22, 31, 40);
-const CHAT_ACCENT: Color = Color::Rgb(135, 206, 235);
-const CHAT_HEADER: Color = Color::Rgb(62, 126, 180);
-const CHAT_TEXT: Color = Color::Rgb(218, 224, 230);
-const CHAT_MUTED: Color = Color::Rgb(105, 118, 130);
-const CHAT_BORDER: Color = Color::Rgb(48, 60, 72);
-const CHAT_SELECT_BG: Color = Color::Rgb(58, 74, 90);
-const CHAT_USER_BG: Color = Color::Rgb(33, 44, 56);
-const CHAT_SUCCESS: Color = Color::Rgb(132, 190, 145);
-const CHAT_WARN: Color = Color::Rgb(204, 180, 105);
 
 pub struct ChatUi {
   pub state: ChatUiState,
@@ -247,20 +235,20 @@ impl ChatUi {
 // ── Top-level draw / handle_key ───────────────────────────────────────────────
 
 impl ChatUi {
-  pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+  pub fn draw(&mut self, frame: &mut Frame, area: Rect, t: &Theme) {
     match self.state {
       // Session list and new-session overlay both draw on top of the
       // chat background — always render the chat background first.
       ChatUiState::SessionList => {
-        self.draw_chat_background(frame, area);
-        self.draw_session_list(frame, area);
+        self.draw_chat_background(frame, area, t);
+        self.draw_session_list(frame, area, t);
       }
       ChatUiState::NewSession => {
-        self.draw_chat_background(frame, area);
-        self.draw_session_list(frame, area);
-        self.draw_new_session_overlay(frame, area);
+        self.draw_chat_background(frame, area, t);
+        self.draw_session_list(frame, area, t);
+        self.draw_new_session_overlay(frame, area, t);
       }
-      ChatUiState::Chat => self.draw_chat(frame, area),
+      ChatUiState::Chat => self.draw_chat(frame, area, t),
     }
   }
 
@@ -273,12 +261,12 @@ impl ChatUi {
 
   /// Render the session-list (or new-session) as a floating popup over the
   /// given area (normally the full terminal rect).  No background panel.
-  pub fn draw_overlay(&mut self, frame: &mut Frame, area: Rect) {
+  pub fn draw_overlay(&mut self, frame: &mut Frame, area: Rect, t: &Theme) {
     match self.state {
-      ChatUiState::SessionList => self.draw_session_list(frame, area),
+      ChatUiState::SessionList => self.draw_session_list(frame, area, t),
       ChatUiState::NewSession => {
-        self.draw_session_list(frame, area);
-        self.draw_new_session_overlay(frame, area);
+        self.draw_session_list(frame, area, t);
+        self.draw_new_session_overlay(frame, area, t);
       }
       _ => {}
     }
@@ -296,13 +284,13 @@ impl ChatUi {
 // ── Background ────────────────────────────────────────────────────────────────
 
 impl ChatUi {
-  fn draw_chat_background(&self, frame: &mut Frame, area: Rect) {
-    let bg = Block::default().style(Style::default().bg(CHAT_BG));
+  fn draw_chat_background(&self, frame: &mut Frame, area: Rect, t: &Theme) {
+    let bg = Block::default().style(Style::default().bg(t.bg_chat));
     frame.render_widget(bg, area);
     // Top separator line.
     frame.render_widget(
       Paragraph::new("─".repeat(area.width as usize))
-        .style(Style::default().fg(CHAT_BORDER).bg(CHAT_BG)),
+        .style(Style::default().fg(t.border).bg(t.bg_chat)),
       Rect { x: area.x, y: area.y, width: area.width, height: 1 },
     );
   }
@@ -311,7 +299,7 @@ impl ChatUi {
 // ── Session list ──────────────────────────────────────────────────────────────
 
 impl ChatUi {
-  fn draw_session_list(&mut self, frame: &mut Frame, area: Rect) {
+  fn draw_session_list(&mut self, frame: &mut Frame, area: Rect, t: &Theme) {
     let popup_w = (area.width as u32 * 60 / 100).max(30) as u16;
     // spec: min(session_count + 4, 12)
     let popup_h = ((self.sessions.len() as u16 + 4).min(12)).max(3);
@@ -339,11 +327,11 @@ impl ChatUi {
         let line = Line::from(vec![
           Span::styled(
             s.title.clone(),
-            Style::default().fg(CHAT_TEXT).add_modifier(Modifier::BOLD),
+            Style::default().fg(t.text).add_modifier(Modifier::BOLD),
           ),
           Span::styled(
             format!("  {}  [{}]", date, provider),
-            Style::default().fg(CHAT_MUTED),
+            Style::default().fg(t.text_dim),
           ),
         ]);
         ListItem::new(line)
@@ -354,16 +342,16 @@ impl ChatUi {
       .block(
         Block::default()
           .borders(Borders::ALL)
-          .border_style(Style::default().fg(CHAT_BORDER))
-          .style(Style::default().bg(CHAT_PANEL_BG))
+          .border_style(Style::default().fg(t.border))
+          .style(Style::default().bg(t.bg_panel))
           .title(Span::styled(
             " ── sessions ── ",
-            Style::default().fg(CHAT_HEADER),
+            Style::default().fg(t.header),
           ))
           .title_alignment(Alignment::Center),
       )
       .highlight_style(
-        Style::default().fg(CHAT_ACCENT).add_modifier(Modifier::BOLD),
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
       )
       .highlight_symbol("  ");
 
@@ -450,7 +438,7 @@ impl ChatUi {
 // ── New session overlay ───────────────────────────────────────────────────────
 
 impl ChatUi {
-  fn draw_new_session_overlay(&self, frame: &mut Frame, area: Rect) {
+  fn draw_new_session_overlay(&self, frame: &mut Frame, area: Rect, t: &Theme) {
     let overlay = centered_rect(50, 3, area);
     frame.render_widget(Clear, overlay);
 
@@ -459,11 +447,11 @@ impl ChatUi {
       .block(
         Block::default()
           .borders(Borders::ALL)
-          .border_style(Style::default().fg(CHAT_BORDER))
-          .style(Style::default().bg(CHAT_PANEL_BG))
+          .border_style(Style::default().fg(t.border))
+          .style(Style::default().bg(t.bg_panel))
           .title(" new session (enter: confirm  esc: cancel) "),
       )
-      .style(Style::default().fg(CHAT_TEXT));
+      .style(Style::default().fg(t.text));
     frame.render_widget(para, overlay);
   }
 
@@ -514,7 +502,7 @@ impl ChatUi {
 // ── Chat view ─────────────────────────────────────────────────────────────────
 
 impl ChatUi {
-  fn draw_chat(&mut self, frame: &mut Frame, area: Rect) {
+  fn draw_chat(&mut self, frame: &mut Frame, area: Rect, t: &Theme) {
     let provider_name = self
       .active_session
       .as_ref()
@@ -529,7 +517,7 @@ impl ChatUi {
 
     // Full background fill.
     frame.render_widget(
-      Block::default().style(Style::default().bg(CHAT_BG)),
+      Block::default().style(Style::default().bg(t.bg_chat)),
       area,
     );
 
@@ -554,7 +542,7 @@ impl ChatUi {
     // ── Top separator ──────────────────────────────────────────────
     frame.render_widget(
       Paragraph::new("─".repeat(area.width as usize))
-        .style(Style::default().fg(CHAT_BORDER).bg(CHAT_BG)),
+        .style(Style::default().fg(t.border).bg(t.bg_chat)),
       sep_area,
     );
 
@@ -570,34 +558,34 @@ impl ChatUi {
     let mdp = format!("{model_name} · {provider_name}");
     let title_part = format!(" │ {session_title} ");
     let (mode_label, mode_color) = match self.input_mode {
-      ChatInputMode::Insert => (" -- INSERT --", CHAT_SUCCESS),
-      ChatInputMode::Normal => (" -- NORMAL --", CHAT_WARN),
+      ChatInputMode::Insert => (" -- INSERT --", t.success),
+      ChatInputMode::Normal => (" -- NORMAL --", t.warning),
     };
     let used =
       prefix.len() + mdp.len() + title_part.len() + mode_label.len() + 2;
     let fill = (area.width as usize).saturating_sub(used);
 
     let header_line = Line::from(vec![
-      Span::styled(prefix.to_string(), Style::default().fg(CHAT_BORDER)),
+      Span::styled(prefix.to_string(), Style::default().fg(t.border)),
       Span::styled(
         mdp,
-        Style::default().fg(CHAT_HEADER).add_modifier(Modifier::BOLD),
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
       ),
-      Span::styled(title_part, Style::default().fg(CHAT_MUTED)),
-      Span::styled("─".repeat(fill), Style::default().fg(CHAT_BORDER)),
+      Span::styled(title_part, Style::default().fg(t.text_dim)),
+      Span::styled("─".repeat(fill), Style::default().fg(t.border)),
       Span::styled(
         mode_label.to_string(),
         Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
       ),
     ]);
     frame.render_widget(
-      Paragraph::new(header_line).style(Style::default().bg(CHAT_BG)),
+      Paragraph::new(header_line).style(Style::default().bg(t.bg_chat)),
       header_area,
     );
 
     // ── Messages ──────────────────────────────────────────────────
     let width = messages_area.width as usize;
-    let msg_lines = self.build_message_lines(width);
+    let msg_lines = self.build_message_lines(width, t);
     let total_lines = msg_lines.len();
     let viewport_height = messages_area.height as usize;
     self.viewport_height = viewport_height;
@@ -609,12 +597,12 @@ impl ChatUi {
 
     frame.render_widget(
       Paragraph::new(Text::from(msg_lines))
-        .style(Style::default().bg(CHAT_BG))
+        .style(Style::default().bg(t.bg_chat))
         .scroll((self.scroll_offset as u16, 0)),
       messages_area,
     );
 
-    self.draw_slash_palette(frame, messages_area);
+    self.draw_slash_palette(frame, messages_area, t);
 
     // Scroll indicator — top-right corner when not at bottom.
     if self.scroll_offset < max_scroll && messages_area.height > 0 {
@@ -623,19 +611,19 @@ impl ChatUi {
       let x = messages_area.x + messages_area.width.saturating_sub(lw);
       frame.render_widget(
         Paragraph::new(label)
-          .style(Style::default().fg(CHAT_MUTED).bg(CHAT_BG)),
+          .style(Style::default().fg(t.text_dim).bg(t.bg_chat)),
         Rect { x, y: messages_area.y, width: lw, height: 1 },
       );
     }
 
     // ── Input bar ─────────────────────────────────────────────────
-    let input_bg = CHAT_INPUT_BG;
+    let input_bg = t.bg_input;
     let input_line = if self.is_loading {
       let dots_idx = ((self.frame_count / 8) as usize) % 4;
       let dots = ["·", "··", "···", "··"][dots_idx];
       Line::from(Span::styled(
         dots.to_string(),
-        Style::default().fg(CHAT_MUTED).bg(input_bg),
+        Style::default().fg(t.text_dim).bg(input_bg),
       ))
     } else if self.input_mode == ChatInputMode::Normal {
       let text = if self.input.is_empty() {
@@ -645,17 +633,17 @@ impl ChatUi {
       };
       Line::from(Span::styled(
         text,
-        Style::default().fg(CHAT_MUTED).bg(input_bg),
+        Style::default().fg(t.text_dim).bg(input_bg),
       ))
     } else if self.input.is_empty() {
       Line::from(Span::styled(
         "Type your message or /help for commands",
-        Style::default().fg(CHAT_MUTED).bg(input_bg),
+        Style::default().fg(t.text_dim).bg(input_bg),
       ))
     } else {
       Line::from(Span::styled(
         format!("{}█", self.input),
-        Style::default().fg(CHAT_TEXT).bg(input_bg),
+        Style::default().fg(t.text).bg(input_bg),
       ))
     };
     frame.render_widget(
@@ -665,9 +653,9 @@ impl ChatUi {
 
     // ── Status bar ────────────────────────────────────────────────
     let status_line =
-      self.build_status_line(&provider_name, &model_name, area.width as usize);
+      self.build_status_line(&provider_name, &model_name, area.width as usize, t);
     frame.render_widget(
-      Paragraph::new(status_line).style(Style::default().bg(CHAT_BG)),
+      Paragraph::new(status_line).style(Style::default().bg(t.bg_chat)),
       status_area,
     );
   }
@@ -677,6 +665,7 @@ impl ChatUi {
     provider_name: &str,
     model_name: &str,
     width: usize,
+    t: &Theme,
   ) -> Line<'static> {
     let (in_tok, out_tok) = self
       .active_session
@@ -703,7 +692,7 @@ impl ChatUi {
     );
     let s = if s.len() > width { s[..width].to_string() } else { s };
 
-    Line::from(Span::styled(s, Style::default().fg(CHAT_MUTED)))
+    Line::from(Span::styled(s, Style::default().fg(t.text_dim)))
   }
 
   fn handle_chat_key(&mut self, key: KeyEvent) -> ChatAction {
@@ -930,7 +919,7 @@ impl ChatUi {
     self.complete_selected_slash_command()
   }
 
-  fn draw_slash_palette(&mut self, frame: &mut Frame, messages_area: Rect) {
+  fn draw_slash_palette(&mut self, frame: &mut Frame, messages_area: Rect, t: &Theme) {
     if self.input_mode != ChatInputMode::Insert || self.is_loading {
       return;
     }
@@ -955,12 +944,12 @@ impl ChatUi {
     };
     let block = Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(CHAT_BORDER).bg(CHAT_BG))
+      .border_style(Style::default().fg(t.border).bg(t.bg_chat))
       .title(Span::styled(
         " commands ",
-        Style::default().fg(CHAT_HEADER).add_modifier(Modifier::BOLD),
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
       ))
-      .style(Style::default().bg(CHAT_BG));
+      .style(Style::default().bg(t.bg_chat));
     let inner = block.inner(area);
 
     frame.render_widget(Clear, area);
@@ -982,16 +971,16 @@ impl ChatUi {
         let selected = start + i == self.slash_selected;
         let style = if selected {
           Style::default()
-            .bg(CHAT_SELECT_BG)
-            .fg(CHAT_TEXT)
+            .bg(t.bg_selection)
+            .fg(t.text)
             .add_modifier(Modifier::BOLD)
         } else {
-          Style::default().fg(CHAT_MUTED).bg(CHAT_BG)
+          Style::default().fg(t.text_dim).bg(t.bg_chat)
         };
         let command_style = if selected {
-          style.fg(CHAT_TEXT)
+          style.fg(t.text)
         } else {
-          Style::default().fg(CHAT_ACCENT).bg(CHAT_BG)
+          Style::default().fg(t.accent).bg(t.bg_chat)
         };
         Line::from(vec![
           Span::styled(" ", style),
@@ -1009,7 +998,7 @@ impl ChatUi {
       .collect();
 
     frame.render_widget(
-      Paragraph::new(lines).style(Style::default().bg(CHAT_BG)),
+      Paragraph::new(lines).style(Style::default().bg(t.bg_chat)),
       inner,
     );
   }
@@ -1121,7 +1110,7 @@ impl ChatUi {
   /// User messages: full-width background highlight, white text.
   /// Assistant messages: no background, gray text, markdown bold handled.
   /// Single blank line between each pair.
-  fn build_message_lines(&self, width: usize) -> Vec<Line<'static>> {
+  fn build_message_lines(&self, width: usize, t: &Theme) -> Vec<Line<'static>> {
     let session = match &self.active_session {
       Some(s) => s,
       None => return vec![],
@@ -1141,7 +1130,7 @@ impl ChatUi {
         Role::System => continue,
 
         Role::User => {
-          let user_bg = Style::default().fg(CHAT_TEXT).bg(CHAT_USER_BG);
+          let user_bg = Style::default().fg(t.text).bg(t.bg_user_msg);
           let content = if msg.content.is_empty() {
             " ".to_string()
           } else {
@@ -1170,7 +1159,7 @@ impl ChatUi {
         }
 
         Role::Assistant => {
-          let base_style = Style::default().fg(CHAT_TEXT);
+          let base_style = Style::default().fg(t.text);
           // Show streaming cursor on the last message while streaming.
           let is_last = i + 1 == msgs.len();
           let display_content = if self.is_streaming && is_last {

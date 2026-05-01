@@ -123,7 +123,7 @@ impl ExportPopup<'_> {
 
     let block = Block::default()
       .borders(Borders::ALL)
-      .border_style(Style::default().fg(theme::BORDER))
+      .border_style(Style::default().fg(theme::current().border))
       .title(if self.is_multi_select_mode() {
         "─── Export notes ───"
       } else {
@@ -153,8 +153,8 @@ impl ExportPopup<'_> {
     frame.render_widget(note_paragraph, chunks[0]);
 
     if self.path_err_msg.is_empty() {
-      let block_style = Style::default().fg(theme::ACCENT);
-      let cursor_style = Style::default().fg(theme::ACCENT).bg(theme::ACCENT);
+      let block_style = Style::default().fg(theme::current().accent);
+      let cursor_style = Style::default().fg(theme::current().accent).bg(theme::current().accent);
       self.path_txt.set_style(block_style);
       self.path_txt.set_cursor_style(cursor_style);
       self.path_txt.set_block(
