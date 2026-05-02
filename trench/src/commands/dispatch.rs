@@ -21,8 +21,12 @@ pub fn dispatch_slash_command(app: &mut App, cmd: SlashCommandInvocation) {
       app.discovery_list_offset = 0;
       app.discovery_status = String::new();
       app.discovery_loading = false;
+      app.discovery_session = crate::discovery::SessionHistory::default();
       crate::store::discovery_cache::save(&app.discovery_items);
-      app.push_chat_assistant_message("Cleared discovery results.".to_string());
+      crate::store::session::clear();
+      app.push_chat_assistant_message(
+        "Cleared discovery results and session history.".to_string(),
+      );
       app.status_message = Some("Cleared discovery results".to_string());
       if app.feed_tab == FeedTab::Discoveries {
         app.reset_active_feed_position();

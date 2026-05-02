@@ -1,5 +1,7 @@
 use std::sync::mpsc;
 
+use serde_json::Value;
+
 use crate::config::Config;
 use crate::discovery::{DiscoveryMessage, agent, ai_query};
 
@@ -9,10 +11,11 @@ pub fn spawn_discovery(
   topic: String,
   config: Config,
   tx: mpsc::Sender<DiscoveryMessage>,
+  prior_history: Option<Vec<Value>>,
 ) {
   std::thread::spawn(move || {
     if config.claude_api_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
-      agent::run(&topic, &config, &tx);
+      agent::run(&topic, &config, &tx, prior_history);
     } else {
       run_fallback(&topic, &config, &tx);
     }

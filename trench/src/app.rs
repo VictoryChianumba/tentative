@@ -242,6 +242,10 @@ pub struct App {
   pub discovery_search_focused: bool,
   pub feed_tab: FeedTab,
   pub discovery_loading: bool,
+  /// Accumulated agent message history — enables multi-turn refinement.
+  pub discovery_session: crate::discovery::SessionHistory,
+  /// Set by Ctrl+N — forces a fresh session even when history exists.
+  pub discovery_force_new: bool,
   pub search_query: String,
   pub search_active: bool,
   pub status_message: Option<String>,
@@ -418,6 +422,8 @@ impl App {
       discovery_search_focused: false,
       feed_tab: FeedTab::Inbox,
       discovery_loading: false,
+      discovery_session: crate::store::session::load(),
+      discovery_force_new: false,
       search_query: String::new(),
       search_active: false,
       status_message: None,
@@ -1265,12 +1271,35 @@ impl App {
           self.merge_discovery_items(items);
           save_discovery_items(&self.discovery_items);
         }
+        DiscoveryMessage::SessionSnapshot(snapshot) => {
+          self.discovery_session = snapshot;
+          crate::store::session::save(&self.discovery_session);
+        }
         DiscoveryMessage::Complete => {
           self.discovery_rx = None;
           self.discovery_loading = false;
           let n = self.discovery_items.len();
           self.discovery_status = format!("Found {n} papers");
           self.status_message = Some("Discovery complete".to_string());
+
+          let topic = self.discovery_session.initial_query.clone();
+          if !topic.is_empty() {
+            let titles: String = self
+              .discovery_items
+              .iter()
+              .take(3)
+              .map(|i| format!("• {}", i.title))
+              .collect::<Vec<_>>()
+              .join("\n");
+            let body = if titles.is_empty() {
+              String::new()
+            } else {
+              format!("\n\nTop results:\n{titles}")
+            };
+            self.push_chat_assistant_message(format!(
+              "Discovery complete for \"{topic}\".\nFound {n} papers.{body}"
+            ));
+          }
         }
         DiscoveryMessage::Error(e) => {
           self.discovery_rx = None;

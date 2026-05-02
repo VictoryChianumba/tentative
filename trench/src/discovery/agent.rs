@@ -24,8 +24,13 @@ Guidelines:
 - Aim for 5-25 relevant papers total. Stop when you have good coverage.
 - After finding papers, write a concise 2-3 sentence summary of what you found.";
 
-pub fn run(topic: &str, config: &Config, tx: &Sender<DiscoveryMessage>) {
-  if let Err(e) = run_inner(topic, config, tx) {
+pub fn run(
+  topic: &str,
+  config: &Config,
+  tx: &Sender<DiscoveryMessage>,
+  prior_history: Option<Vec<Value>>,
+) {
+  if let Err(e) = run_inner(topic, config, tx, prior_history) {
     let _ = tx.send(DiscoveryMessage::Error(e));
   }
 }
@@ -34,6 +39,7 @@ fn run_inner(
   topic: &str,
   config: &Config,
   tx: &Sender<DiscoveryMessage>,
+  prior_history: Option<Vec<Value>>,
 ) -> Result<(), String> {
   let api_key = config
     .claude_api_key
@@ -52,8 +58,13 @@ fn run_inner(
     .build()
     .map_err(|e| e.to_string())?;
 
-  let mut messages: Vec<Value> =
-    vec![json!({ "role": "user", "content": topic })];
+  let mut messages: Vec<Value> = match prior_history {
+    Some(mut h) => {
+      h.push(json!({ "role": "user", "content": topic }));
+      h
+    }
+    None => vec![json!({ "role": "user", "content": topic })],
+  };
 
   let _ = tx.send(DiscoveryMessage::StatusUpdate(format!(
     "Starting discovery for '{topic}'…"
@@ -75,6 +86,7 @@ fn run_inner(
 
     if tool_uses.is_empty() {
       // No tools called — agent is done.
+      emit_snapshot(&messages, tx);
       let _ = tx.send(DiscoveryMessage::Complete);
       return Ok(());
     }
@@ -108,8 +120,20 @@ fn run_inner(
     messages.push(json!({ "role": "user", "content": tool_results }));
   }
 
+  emit_snapshot(&messages, tx);
   let _ = tx.send(DiscoveryMessage::Complete);
   Ok(())
+}
+
+fn emit_snapshot(messages: &[Value], tx: &Sender<DiscoveryMessage>) {
+  let initial_query =
+    messages[0]["content"].as_str().unwrap_or("").to_string();
+  let mut snapshot = crate::discovery::SessionHistory {
+    messages: messages.to_vec(),
+    initial_query,
+  };
+  snapshot.truncate_to_limit();
+  let _ = tx.send(DiscoveryMessage::SessionSnapshot(snapshot));
 }
 
 #[derive(Deserialize)]

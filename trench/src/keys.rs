@@ -1238,6 +1238,10 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
           spawn_ai_discovery(topic, config, app);
         }
       }
+      KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        app.discovery_force_new = true;
+        app.discovery_query.clear();
+      }
       KeyCode::Backspace => {
         app.discovery_query.pop();
       }

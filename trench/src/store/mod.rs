@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod discovery_cache;
 pub mod enrichment_cache;
+pub mod session;
 
 use std::collections::HashMap;
 use std::fs;

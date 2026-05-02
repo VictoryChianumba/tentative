@@ -744,19 +744,24 @@ fn draw_discoveries_with_searchbar(frame: &mut Frame, app: &mut App, area: Rect)
 fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
   let t = app.active_theme.theme();
   let w = area.width as usize;
+  let has_session = !app.discovery_session.is_empty();
 
-  let sep = "─".repeat(w.saturating_sub(14));
+  let badge = if has_session { " [session]" } else { "" };
+  let sep_width = w.saturating_sub(14 + badge.len());
+  let sep = "─".repeat(sep_width);
   let sep_line = Line::from(Span::styled(
-    format!("─── Discovery {sep}"),
+    format!("─── Discovery{badge} {sep}"),
     Style::default().fg(t.border),
   ));
 
   let status = if app.discovery_loading {
     app.discovery_status.as_str()
-  } else if app.discovery_status.is_empty() {
-    "Type to search — any key focuses this bar"
-  } else {
+  } else if !app.discovery_status.is_empty() {
     app.discovery_status.as_str()
+  } else if has_session {
+    "Session active — Ctrl+N for a new search"
+  } else {
+    "Type to search — any key focuses this bar"
   };
   let status_line = Line::from(Span::styled(
     truncate(status, w),
@@ -773,7 +778,13 @@ fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
   ]);
 
   let hint_text = if app.discovery_search_focused {
-    "Enter: search  Esc: unfocus"
+    if has_session {
+      "Enter: refine  Ctrl+N: new search  Esc: unfocus"
+    } else {
+      "Enter: search  Esc: unfocus"
+    }
+  } else if has_session {
+    "Any key to refine  ·  Ctrl+N: new search"
   } else {
     "Any key to focus  ·  /discover TOPIC from chat"
   };

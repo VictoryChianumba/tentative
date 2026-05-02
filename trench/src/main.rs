@@ -468,13 +468,38 @@ pub(crate) fn spawn_ai_discovery(
   config: config::Config,
   app: &mut App,
 ) {
+  let has_claude = config
+    .claude_api_key
+    .as_deref()
+    .map(|k| !k.trim().is_empty())
+    .unwrap_or(false);
+
+  let is_refinement =
+    !app.discovery_session.is_empty() && !app.discovery_force_new && has_claude;
+
+  let prior_history = if is_refinement {
+    Some(app.discovery_session.messages.clone())
+  } else {
+    None
+  };
+
+  if !is_refinement {
+    app.discovery_items.clear();
+    app.invalidate_visible_cache();
+  }
+
+  app.discovery_force_new = false;
+
   let (tx, rx) = mpsc::channel::<discovery::DiscoveryMessage>();
   app.discovery_rx = Some(rx);
   app.discovery_loading = true;
-  app.discovery_status = String::new();
-  app.discovery_items.clear();
-  app.invalidate_visible_cache();
-  discovery::pipeline::spawn_discovery(topic, config, tx);
+  app.discovery_status = if is_refinement {
+    format!("Refining: '{topic}'…")
+  } else {
+    String::new()
+  };
+
+  discovery::pipeline::spawn_discovery(topic, config, tx, prior_history);
 }
 
 /// Like do_refresh, but always runs — reloads config from disk, abandons any
