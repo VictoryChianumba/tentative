@@ -471,9 +471,7 @@ pub(crate) fn spawn_ai_discovery(
   let (tx, rx) = mpsc::channel::<discovery::DiscoveryMessage>();
   app.discovery_rx = Some(rx);
   app.discovery_loading = true;
-  app.discovery_plan = None;
-  app.discovery_plan_selected.clear();
-  app.discovery_plan_cursor = 0;
+  app.discovery_status = String::new();
   app.discovery_items.clear();
   app.invalidate_visible_cache();
   discovery::pipeline::spawn_discovery(topic, config, tx);

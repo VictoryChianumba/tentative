@@ -1225,18 +1225,16 @@ fn clamp_theme_picker_scroll(app: &mut App) {
 }
 
 fn handle_feed_view(key: KeyEvent, app: &mut App) {
-  // Discovery query input — highest priority.
-  if app.discovery_query_active {
+  // Discoveries tab — search bar input (when focused).
+  if app.feed_tab == FeedTab::Discoveries && app.discovery_search_focused {
     match key.code {
       KeyCode::Esc => {
-        app.discovery_query_active = false;
-        app.discovery_query.clear();
+        app.discovery_search_focused = false;
       }
       KeyCode::Enter => {
         if !app.discovery_query.is_empty() && !app.discovery_loading {
           let topic = app.discovery_query.clone();
           let config = app.config.clone();
-          app.discovery_query_active = false;
           spawn_ai_discovery(topic, config, app);
         }
       }
@@ -1251,40 +1249,14 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
     return;
   }
 
-  // Discoveries tab — plan checklist keys (when a plan is loaded).
-  if app.feed_tab == FeedTab::Discoveries && app.discovery_plan.is_some() {
-    match key.code {
-      KeyCode::Char('j') | KeyCode::Down => {
-        let max = app.discovery_checklist_len().saturating_sub(1);
-        app.discovery_plan_cursor = (app.discovery_plan_cursor + 1).min(max);
-      }
-      KeyCode::Char('k') | KeyCode::Up => {
-        app.discovery_plan_cursor = app.discovery_plan_cursor.saturating_sub(1);
-      }
-      KeyCode::Char(' ') => {
-        let idx = app.discovery_plan_cursor;
-        app.toggle_plan_selection(idx);
-      }
-      KeyCode::Char('a') => {
-        app.add_selected_plan_sources();
-        force_refresh(app);
-      }
-      KeyCode::Esc => {
-        app.discovery_plan = None;
-        app.discovery_plan_selected.clear();
-        app.discovery_plan_cursor = 0;
-      }
-      _ => {}
-    }
-    return;
-  }
-
-  // Discoveries tab — no plan: `/` opens query input.
+  // Discoveries tab — any printable char focuses the search bar.
   if app.feed_tab == FeedTab::Discoveries {
-    if let KeyCode::Char('/') = key.code {
-      app.discovery_query_active = true;
-      app.discovery_query.clear();
-      return;
+    if let KeyCode::Char(c) = key.code {
+      if c != 'q' {
+        app.discovery_search_focused = true;
+        app.discovery_query.push(c);
+        return;
+      }
     }
   }
 

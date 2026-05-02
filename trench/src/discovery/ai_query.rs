@@ -1,8 +1,15 @@
 use crate::config::Config;
-use crate::discovery::{DiscoveredRssFeed, DiscoveredSource, DiscoveryPlan};
 use chat::provider::ChatProvider;
 use serde::Deserialize;
-use serde_json::Value;
+
+/// Fallback single-shot plan — used when no Claude key is configured.
+/// Asks the AI to return JSON with arXiv categories, IDs, and search terms.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryPlan {
+  pub arxiv_categories: Vec<String>,
+  pub paper_ids: Vec<String>,
+  pub search_terms: Vec<String>,
+}
 
 pub fn run_ai_query(
   topic: &str,
@@ -10,18 +17,14 @@ pub fn run_ai_query(
 ) -> Result<DiscoveryPlan, String> {
   let prompt = build_prompt(topic);
   let content = if let Some(key) =
-    config.claude_api_key.as_ref().filter(|k| !k.trim().is_empty())
-  {
-    query_claude(key, &prompt)?
-  } else if let Some(key) =
     config.openai_api_key.as_ref().filter(|k| !k.trim().is_empty())
   {
-    query_openai(key, &prompt)?
+    send_prompt(chat::OpenAiProvider::new(key), &prompt)?
   } else {
-    return Err("No Claude or OpenAI API key configured".to_string());
+    return Err("No OpenAI API key configured".to_string());
   };
 
-  parse_plan(topic, &content)
+  parse_plan(&content)
 }
 
 fn build_prompt(topic: &str) -> String {
@@ -29,37 +32,16 @@ fn build_prompt(topic: &str) -> String {
     r#"You are a research discovery assistant for an AI/ML feed reader.
 Topic: "{topic}"
 
-Return ONLY valid JSON. Do not include markdown, code fences, or explanation.
-
-Required JSON shape:
+Return ONLY valid JSON with this shape:
 {{
   "topic": "{topic}",
   "arxiv_categories": ["cs.LG"],
-  "paper_ids": ["2312.01234v1"],
-  "rss_urls": [{{"url": "https://example.com/feed", "name": "Example", "reason": "why relevant"}}],
-  "github_sources": [{{"url": "https://github.com/org/repo", "kind": "repo", "reason": "why relevant"}}],
-  "huggingface_sources": [{{"url": "https://huggingface.co/papers", "kind": "search", "reason": "why relevant"}}],
-  "search_terms": ["sparse autoencoder mechanistic interpretability"],
-  "summary": "One sentence summary."
+  "paper_ids": ["2312.01234"],
+  "search_terms": ["sparse autoencoder mechanistic interpretability"]
 }}
 
-Rules:
-- arxiv_categories: at most 8 relevant category codes.
-- paper_ids: at most 20 specific arXiv IDs you are confident exist.
-- rss_urls: at most 10 RSS/blog feed URLs directly relevant to this topic.
-- github_sources: at most 10 GitHub org/repo URLs; checklist only.
-- huggingface_sources: at most 10 HuggingFace URLs; checklist only.
-- search_terms: 1 to 5 specific phrases for arXiv search.
-- summary: 80 characters or fewer."#
+Rules: at most 8 categories, 20 paper IDs, 5 search terms. No explanation."#
   )
-}
-
-fn query_claude(api_key: &str, prompt: &str) -> Result<String, String> {
-  send_prompt(chat::ClaudeProvider::new(api_key), prompt)
-}
-
-fn query_openai(api_key: &str, prompt: &str) -> Result<String, String> {
-  send_prompt(chat::OpenAiProvider::new(api_key), prompt)
 }
 
 fn send_prompt(
@@ -74,17 +56,12 @@ fn send_prompt(
   provider.send(&messages).map(|r| r.content).map_err(|e| e.to_string())
 }
 
-fn parse_plan(topic: &str, content: &str) -> Result<DiscoveryPlan, String> {
+fn parse_plan(content: &str) -> Result<DiscoveryPlan, String> {
   let stripped = strip_json_fence(content);
-  let raw: RawDiscoveryPlan = serde_json::from_str(stripped)
+  let raw: RawPlan = serde_json::from_str(stripped)
     .map_err(|e| format!("Discovery JSON parse failed: {e}"))?;
 
   let mut plan = DiscoveryPlan {
-    topic: if raw.topic.trim().is_empty() {
-      topic.to_string()
-    } else {
-      raw.topic.trim().to_string()
-    },
     arxiv_categories: raw
       .arxiv_categories
       .into_iter()
@@ -97,24 +74,6 @@ fn parse_plan(topic: &str, content: &str) -> Result<DiscoveryPlan, String> {
       .filter_map(|id| normalize_arxiv_id(&id))
       .take(20)
       .collect(),
-    rss_urls: raw
-      .rss_urls
-      .into_iter()
-      .filter_map(normalize_rss_feed)
-      .take(10)
-      .collect(),
-    github_sources: raw
-      .github_sources
-      .into_iter()
-      .filter_map(normalize_source)
-      .take(10)
-      .collect(),
-    huggingface_sources: raw
-      .huggingface_sources
-      .into_iter()
-      .filter_map(normalize_source)
-      .take(10)
-      .collect(),
     search_terms: raw
       .search_terms
       .into_iter()
@@ -122,7 +81,6 @@ fn parse_plan(topic: &str, content: &str) -> Result<DiscoveryPlan, String> {
       .filter(|s| !s.is_empty())
       .take(5)
       .collect(),
-    summary: raw.summary.chars().take(80).collect(),
   };
 
   plan.arxiv_categories.sort();
@@ -135,24 +93,15 @@ fn parse_plan(topic: &str, content: &str) -> Result<DiscoveryPlan, String> {
   Ok(plan)
 }
 
+// serde silently ignores unknown fields by default — no need to list them.
 #[derive(Deserialize)]
-struct RawDiscoveryPlan {
-  #[serde(default)]
-  topic: String,
+struct RawPlan {
   #[serde(default)]
   arxiv_categories: Vec<String>,
   #[serde(default, alias = "arxiv_ids")]
   paper_ids: Vec<String>,
   #[serde(default)]
-  rss_urls: Vec<Value>,
-  #[serde(default)]
-  github_sources: Vec<Value>,
-  #[serde(default, alias = "huggingface")]
-  huggingface_sources: Vec<Value>,
-  #[serde(default)]
   search_terms: Vec<String>,
-  #[serde(default)]
-  summary: String,
 }
 
 fn strip_json_fence(content: &str) -> &str {
@@ -160,7 +109,6 @@ fn strip_json_fence(content: &str) -> &str {
   if !trimmed.starts_with("```") {
     return trimmed;
   }
-
   let without_open = trimmed
     .strip_prefix("```json")
     .or_else(|| trimmed.strip_prefix("```"))
@@ -201,81 +149,6 @@ pub fn normalize_arxiv_id(value: &str) -> Option<String> {
   if valid { Some(id.to_string()) } else { None }
 }
 
-fn normalize_rss_feed(value: Value) -> Option<DiscoveredRssFeed> {
-  match value {
-    Value::String(url) => {
-      if !is_http_url(&url) {
-        return None;
-      }
-      Some(DiscoveredRssFeed {
-        name: feed_name_from_url(&url),
-        url,
-        reason: String::new(),
-      })
-    }
-    Value::Object(mut obj) => {
-      let url = obj.remove("url")?.as_str()?.trim().to_string();
-      if !is_http_url(&url) {
-        return None;
-      }
-      let name = obj
-        .remove("name")
-        .or_else(|| obj.remove("title"))
-        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| feed_name_from_url(&url));
-      let reason = obj
-        .remove("reason")
-        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-        .unwrap_or_default();
-      Some(DiscoveredRssFeed { url, name, reason })
-    }
-    _ => None,
-  }
-}
-
-fn normalize_source(value: Value) -> Option<DiscoveredSource> {
-  match value {
-    Value::String(url) => {
-      if !is_http_url(&url) {
-        return None;
-      }
-      Some(DiscoveredSource { url, kind: String::new(), reason: String::new() })
-    }
-    Value::Object(mut obj) => {
-      let url = obj
-        .remove("url")
-        .or_else(|| obj.remove("value"))?
-        .as_str()?
-        .trim()
-        .to_string();
-      if !is_http_url(&url) {
-        return None;
-      }
-      let kind = obj
-        .remove("kind")
-        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-        .unwrap_or_default();
-      let reason = obj
-        .remove("reason")
-        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-        .unwrap_or_default();
-      Some(DiscoveredSource { url, kind, reason })
-    }
-    _ => None,
-  }
-}
-
 pub fn is_http_url(url: &str) -> bool {
   url.starts_with("http://") || url.starts_with("https://")
-}
-
-fn feed_name_from_url(url: &str) -> String {
-  url
-    .trim_start_matches("https://")
-    .trim_start_matches("http://")
-    .split('/')
-    .next()
-    .unwrap_or("feed")
-    .to_string()
 }

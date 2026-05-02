@@ -5,6 +5,20 @@ use crate::models::{
   detect_subtopics,
 };
 
+pub fn search(query: &str) -> Result<Vec<FeedItem>, String> {
+  let url = format!(
+    "https://paperswithcode.com/api/v1/papers/?format=json&q={}",
+    crate::http::url_encode(query)
+  );
+  let resp = crate::http::client()
+    .get(&url)
+    .send()
+    .map_err(|e| format!("papers_with_code search: HTTP failed: {e}"))?;
+  let body = crate::http::read_body(resp)
+    .map_err(|e| format!("papers_with_code search: read body failed: {e}"))?;
+  parse_page(&body)
+}
+
 pub fn fetch() -> Result<Vec<FeedItem>, String> {
   let mut items = Vec::new();
   for page in 1..=2u32 {

@@ -19,7 +19,7 @@ pub fn dispatch_slash_command(app: &mut App, cmd: SlashCommandInvocation) {
       app.invalidate_visible_cache();
       app.discovery_selected_index = 0;
       app.discovery_list_offset = 0;
-      app.discovery_plan = None;
+      app.discovery_status = String::new();
       app.discovery_loading = false;
       crate::store::discovery_cache::save(&app.discovery_items);
       app.push_chat_assistant_message("Cleared discovery results.".to_string());

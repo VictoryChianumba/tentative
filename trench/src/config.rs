@@ -37,6 +37,8 @@ pub struct Config {
   pub openai_api_key: Option<String>,
   #[serde(default)]
   pub core_api_key: Option<String>,
+  #[serde(default)]
+  pub perplexity_api_key: Option<String>,
   #[serde(default = "default_chat_provider")]
   pub default_chat_provider: String,
   #[serde(default)]

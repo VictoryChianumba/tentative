@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::discovery::{DiscoveryMessage, DiscoveryPlan};
+use crate::discovery::DiscoveryMessage;
 use crate::ingestion::message::FetchMessage;
 use crate::models::*;
 use chrono::Utc;
@@ -235,11 +235,11 @@ pub struct App {
   pub discovery_selected_index: usize,
   pub discovery_list_offset: usize,
   pub discovery_rx: Option<Receiver<DiscoveryMessage>>,
-  pub discovery_plan: Option<DiscoveryPlan>,
-  pub discovery_plan_selected: Vec<bool>,
-  pub discovery_plan_cursor: usize,
+  /// Last status line from the agent ("Searching…", "Found N papers", etc.).
+  pub discovery_status: String,
   pub discovery_query: String,
-  pub discovery_query_active: bool,
+  /// Whether the persistent search bar at the bottom of Discoveries has focus.
+  pub discovery_search_focused: bool,
   pub feed_tab: FeedTab,
   pub discovery_loading: bool,
   pub search_query: String,
@@ -413,11 +413,9 @@ impl App {
       discovery_selected_index: 0,
       discovery_list_offset: 0,
       discovery_rx: None,
-      discovery_plan: None,
-      discovery_plan_selected: Vec::new(),
-      discovery_plan_cursor: 0,
+      discovery_status: String::new(),
       discovery_query: String::new(),
-      discovery_query_active: false,
+      discovery_search_focused: false,
       feed_tab: FeedTab::Inbox,
       discovery_loading: false,
       search_query: String::new(),
@@ -1260,11 +1258,8 @@ impl App {
 
     for msg in messages {
       match msg {
-        DiscoveryMessage::PlanReady(plan) => {
-          let n_cats = plan.arxiv_categories.len();
-          let n_feeds = plan.rss_urls.len();
-          self.discovery_plan_selected = vec![true; n_cats + n_feeds];
-          self.discovery_plan = Some(plan);
+        DiscoveryMessage::StatusUpdate(s) => {
+          self.discovery_status = s;
         }
         DiscoveryMessage::Items(items) => {
           self.merge_discovery_items(items);
@@ -1273,11 +1268,14 @@ impl App {
         DiscoveryMessage::Complete => {
           self.discovery_rx = None;
           self.discovery_loading = false;
+          let n = self.discovery_items.len();
+          self.discovery_status = format!("Found {n} papers");
           self.status_message = Some("Discovery complete".to_string());
         }
         DiscoveryMessage::Error(e) => {
           self.discovery_rx = None;
           self.discovery_loading = false;
+          self.discovery_status = format!("Error: {e}");
           self.push_chat_assistant_message(format!("Discovery failed: {e}"));
           self.status_message = Some("Discovery failed".to_string());
         }
@@ -1416,62 +1414,6 @@ impl App {
   pub fn clear_filters(&mut self) {
     self.active_filters = FilterState::new();
     self.reset_active_feed_position();
-  }
-
-  // ── Discovery checklist ─────────────────────────────────────────────────
-
-  /// Number of selectable rows in the discovery plan checklist.
-  pub fn discovery_checklist_len(&self) -> usize {
-    match &self.discovery_plan {
-      Some(p) => p.arxiv_categories.len() + p.rss_urls.len(),
-      None => 0,
-    }
-  }
-
-  /// Toggle checked state for a checklist row (arXiv cats first, then RSS).
-  pub fn discovery_toggle(&mut self, idx: usize) {
-    if let Some(v) = self.discovery_plan_selected.get_mut(idx) {
-      *v = !*v;
-    }
-  }
-
-  /// Add all checked sources to config and save.
-  pub fn discovery_add_checked(&mut self) {
-    let plan = match self.discovery_plan.clone() {
-      Some(p) => p,
-      None => return,
-    };
-    let n_cats = plan.arxiv_categories.len();
-    for (i, cat) in plan.arxiv_categories.iter().enumerate() {
-      if self.discovery_plan_selected.get(i).copied().unwrap_or(false)
-        && !self.config.sources.arxiv_categories.contains(cat)
-      {
-        self.config.sources.arxiv_categories.push(cat.clone());
-      }
-    }
-    for (j, feed) in plan.rss_urls.iter().enumerate() {
-      let idx = n_cats + j;
-      if self.discovery_plan_selected.get(idx).copied().unwrap_or(false) {
-        let exists =
-          self.config.sources.custom_feeds.iter().any(|f| f.url == feed.url);
-        if !exists {
-          self.config.sources.custom_feeds.push(crate::config::CustomFeed {
-            url: feed.url.clone(),
-            name: feed.name.clone(),
-            feed_type: "rss".to_string(),
-          });
-        }
-      }
-    }
-    self.config.save();
-  }
-
-  pub fn toggle_plan_selection(&mut self, idx: usize) {
-    self.discovery_toggle(idx);
-  }
-
-  pub fn add_selected_plan_sources(&mut self) {
-    self.discovery_add_checked();
   }
 
   // ── Sources popup ───────────────────────────────────────────────────────

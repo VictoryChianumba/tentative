@@ -700,16 +700,10 @@ fn draw_feed_pane(frame: &mut Frame, app: &mut App, area: Rect) {
   }
   let content_area = area;
 
-  // Discoveries tab: show plan checklist or query input instead of the feed table.
+  // Discoveries tab: paper list always shown; persistent search bar pinned at bottom.
   if app.feed_tab == FeedTab::Discoveries {
-    if app.discovery_plan.is_some() {
-      draw_discovery_checklist(frame, app, content_area);
-      return;
-    }
-    if app.discovery_query_active {
-      draw_discovery_query_bar(frame, app, content_area);
-      return;
-    }
+    draw_discoveries_with_searchbar(frame, app, content_area);
+    return;
   }
 
   // Narrow pane: switch to title-only list to avoid squished columns.
@@ -720,167 +714,76 @@ fn draw_feed_pane(frame: &mut Frame, app: &mut App, area: Rect) {
   }
 }
 
-fn draw_discovery_query_bar(frame: &mut Frame, app: &App, area: Rect) {
+/// Discoveries tab: paper list above, persistent search bar below.
+fn draw_discoveries_with_searchbar(frame: &mut Frame, app: &mut App, area: Rect) {
+  const FOOTER_H: u16 = 4; // separator + status + input + hint
+  if area.height <= FOOTER_H {
+    draw_discovery_searchbar(frame, app, area);
+    return;
+  }
+
+  let list_h = area.height - FOOTER_H;
+  let list_area = Rect { x: area.x, y: area.y, width: area.width, height: list_h };
+  let bar_area = Rect {
+    x: area.x,
+    y: area.y + list_h,
+    width: area.width,
+    height: FOOTER_H,
+  };
+
+  // Paper list
+  if area.width < 70 {
+    draw_narrow_feed(frame, app, list_area);
+  } else {
+    draw_item_table(frame, app, list_area);
+  }
+
+  draw_discovery_searchbar(frame, app, bar_area);
+}
+
+fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
   let t = app.active_theme.theme();
-  let label = "Search: ";
-  let cursor = "_";
-  let query_line = Line::from(vec![
-    Span::styled(label, Style::default().fg(t.text_dim)),
+  let w = area.width as usize;
+
+  let sep = "─".repeat(w.saturating_sub(14));
+  let sep_line = Line::from(Span::styled(
+    format!("─── Discovery {sep}"),
+    Style::default().fg(t.border),
+  ));
+
+  let status = if app.discovery_loading {
+    app.discovery_status.as_str()
+  } else if app.discovery_status.is_empty() {
+    "Type to search — any key focuses this bar"
+  } else {
+    app.discovery_status.as_str()
+  };
+  let status_line = Line::from(Span::styled(
+    truncate(status, w),
+    Style::default().fg(t.text_dim),
+  ));
+
+  let cursor = if app.discovery_search_focused { "█" } else { " " };
+  let input_line = Line::from(vec![
+    Span::styled("> ", Style::default().fg(t.accent)),
     Span::styled(
       format!("{}{}", app.discovery_query, cursor),
       Style::default().fg(t.text),
     ),
   ]);
-  let bar_h = 2.min(area.height);
-  let bar_rect =
-    Rect { x: area.x, y: area.y, width: area.width, height: bar_h };
-  frame.render_widget(
-    Paragraph::new(vec![
-      query_line,
-      Line::from(Span::styled(
-        "Enter: search  Esc: cancel",
-        Style::default().fg(t.text_dim),
-      )),
-    ]),
-    bar_rect,
-  );
-}
 
-fn draw_discovery_checklist(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
-  let plan = match &app.discovery_plan {
-    Some(p) => p,
-    None => return,
+  let hint_text = if app.discovery_search_focused {
+    "Enter: search  Esc: unfocus"
+  } else {
+    "Any key to focus  ·  /discover TOPIC from chat"
   };
-
-  let cursor = app.discovery_plan_cursor;
-  let w = area.width as usize;
-  let mut lines: Vec<Line> = Vec::new();
-
-  // Header
-  let header_text = format!("Discovery: \"{}\"", plan.topic);
-  lines.push(Line::from(Span::styled(
-    truncate(&header_text, w),
-    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-  )));
-  if !plan.summary.is_empty() {
-    lines.push(Line::from(Span::styled(
-      truncate(&plan.summary, w),
-      Style::default().fg(t.text_dim),
-    )));
-  }
-  lines.push(Line::from(Span::styled(
-    "─".repeat(w),
-    Style::default().fg(t.border),
-  )));
-
-  // arXiv category rows
-  if !plan.arxiv_categories.is_empty() {
-    lines.push(Line::from(Span::styled(
-      "arXiv categories",
-      Style::default().fg(t.header).add_modifier(Modifier::BOLD),
-    )));
-    for (i, cat) in plan.arxiv_categories.iter().enumerate() {
-      let checked =
-        app.discovery_plan_selected.get(i).copied().unwrap_or(false);
-      let is_cursor = i == cursor;
-      let cb = if checked { "[x]" } else { "[ ]" };
-      let text = format!("  {cb} {cat}");
-      let style = if is_cursor {
-        t.style_selection_text()
-      } else if checked {
-        Style::default().fg(t.accent)
-      } else {
-        Style::default().fg(t.text_dim)
-      };
-      lines.push(Line::from(Span::styled(truncate(&text, w), style)));
-    }
-    lines.push(Line::from(""));
-  }
-
-  // RSS feed rows
-  let n_cats = plan.arxiv_categories.len();
-  if !plan.rss_urls.is_empty() {
-    lines.push(Line::from(Span::styled(
-      "RSS feeds",
-      Style::default().fg(t.header).add_modifier(Modifier::BOLD),
-    )));
-    for (j, feed) in plan.rss_urls.iter().enumerate() {
-      let idx = n_cats + j;
-      let checked =
-        app.discovery_plan_selected.get(idx).copied().unwrap_or(false);
-      let is_cursor = idx == cursor;
-      let cb = if checked { "[x]" } else { "[ ]" };
-      let reason = if feed.reason.is_empty() {
-        String::new()
-      } else {
-        format!("  — {}", feed.reason)
-      };
-      let text = format!("  {cb} {}{}", feed.name, reason);
-      let style = if is_cursor {
-        t.style_selection_text()
-      } else if checked {
-        Style::default().fg(t.accent)
-      } else {
-        Style::default().fg(t.text_dim)
-      };
-      lines.push(Line::from(Span::styled(truncate(&text, w), style)));
-    }
-    lines.push(Line::from(""));
-  }
-
-  // Hint line pinned at bottom if space allows; otherwise append inline.
-  let hint = Line::from(Span::styled(
-    "j/k: navigate  Space: toggle  a: add selected  Esc: dismiss",
+  let hint_line = Line::from(Span::styled(
+    hint_text,
     Style::default().fg(t.text_dim),
   ));
-  let total_lines = lines.len() + 1; // +1 for hint
-  let height = area.height as usize;
 
-  let (scroll, show_hint_inline) = if total_lines <= height {
-    (0usize, true)
-  } else {
-    // Scroll to keep cursor row visible.
-    let cursor_row = lines
-      .iter()
-      .enumerate()
-      .find(|(_, l)| {
-        l.spans.first().map_or(false, |s| s.style.bg == Some(t.bg_selection))
-      })
-      .map(|(i, _)| i)
-      .unwrap_or(0);
-    let raw_scroll = if cursor_row >= height.saturating_sub(2) {
-      cursor_row.saturating_sub(height.saturating_sub(3))
-    } else {
-      0
-    };
-    // Cap so we never scroll past the last line — no blank space at bottom.
-    let scroll = raw_scroll.min(total_lines.saturating_sub(height));
-    (scroll, false)
-  };
-
-  if show_hint_inline {
-    lines.push(hint);
-  }
-
-  let para = Paragraph::new(lines).scroll((scroll as u16, 0));
+  let para = Paragraph::new(vec![sep_line, status_line, input_line, hint_line]);
   frame.render_widget(para, area);
-
-  if !show_hint_inline && area.height > 0 {
-    let hint_area = Rect {
-      x: area.x,
-      y: area.y + area.height - 1,
-      width: area.width,
-      height: 1,
-    };
-    frame.render_widget(
-      Paragraph::new(Line::from(Span::styled(
-        "j/k: navigate  Space: toggle  a: add selected  Esc: dismiss",
-        Style::default().fg(t.text_dim),
-      ))),
-      hint_area,
-    );
-  }
 }
 
 fn draw_narrow_feed(frame: &mut Frame, app: &mut App, area: Rect) {
