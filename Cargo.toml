@@ -12,10 +12,6 @@ members = [
   "trench",
   "crates/notes",
   "crates/chat",
-  "crates/math-render",
-  "crates/arxiv-render",
-  "crates/doc-model",
-  "crates/block-reader",
   "crates/ui-theme",
 
   # Internal

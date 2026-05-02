@@ -24,9 +24,6 @@ chrono = { version = "0.4", features = ["serde"] }
 notes = { path = "../crates/notes" }
 chat = { path = "../crates/chat" }
 cli-text-reader = { path = "../cli-text-reader" }
-block-reader = { path = "../crates/block-reader" }
-doc-model = { path = "../crates/doc-model" }
-arxiv-render = { path = "../crates/arxiv-render" }
 ui-theme = { path = "../crates/ui-theme" }
 syntect = "5"
 readability = "0.3"

@@ -361,10 +361,6 @@ pub struct App {
   // Background fulltext fetch (article reader)
   pub fulltext_rx: Option<Receiver<Result<Vec<String>, String>>>,
   pub fulltext_loading: bool,
-  // Background block-reader fetch (arXiv papers)
-  pub block_reader_rx: Option<Receiver<Result<(Vec<doc_model::Block>, block_reader::PaperMeta), String>>>,
-  pub block_reader_loading: bool,
-  pub block_reader_key: Option<String>,
   // Background repo fetch (repo viewer)
   pub repo_fetch_rx: Option<Receiver<RepoFetchResult>>,
 
@@ -498,9 +494,6 @@ impl App {
       last_read_source: None,
       fulltext_rx: None,
       fulltext_loading: false,
-      block_reader_rx: None,
-      block_reader_loading: false,
-      block_reader_key: None,
       repo_fetch_rx: None,
       last_scroll_time: None,
       scroll_debounce_ms: 50,

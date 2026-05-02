@@ -1443,12 +1443,7 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
         }
       }
       KeyCode::Enter => {
-        log::debug!(
-          "feed Enter: fulltext_loading={} block_reader_loading={}",
-          app.fulltext_loading,
-          app.block_reader_loading
-        );
-        if !app.fulltext_loading && !app.block_reader_loading {
+        if !app.fulltext_loading {
           if let Some(item) = app.selected_item().cloned() {
             app.last_read = Some(item.title.clone());
             app.last_read_source = Some(if item.source_name.is_empty() {
@@ -1456,7 +1451,6 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
             } else {
               item.source_name.clone()
             });
-            // TODO: switch back to block_reader for arXiv once it's ready.
             {
               log::debug!(
                 "feed Enter: spawning fulltext fetch for url={}",
