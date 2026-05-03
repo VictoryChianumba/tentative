@@ -44,6 +44,8 @@ pub struct ChatSlashCommandSpec {
   pub command: String,
   pub completion: String,
   pub description: String,
+  /// Short category label shown in the palette, e.g. "disc", "src".
+  pub badge: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -928,73 +930,87 @@ impl ChatUi {
     }
 
     self.slash_selected = self.slash_selected.min(suggestions.len() - 1);
+
+    let visible = suggestions.len().min(6);
     self.clamp_slash_scroll(suggestions.len());
-    let height = (suggestions.len() as u16)
-      .min(6)
-      .saturating_add(2)
-      .min(messages_area.height);
-    let width = messages_area.width.min(64).max(28);
+
+    // 1 separator + visible rows + 1 count line
+    let height = (visible as u16 + 2).min(messages_area.height);
     let area = Rect {
       x: messages_area.x,
       y: messages_area.y + messages_area.height.saturating_sub(height),
-      width,
+      width: messages_area.width,
       height,
     };
-    let block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(t.border).bg(t.bg_chat))
-      .title(Span::styled(
-        " commands ",
-        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
-      ))
-      .style(Style::default().bg(t.bg_chat));
-    let inner = block.inner(area);
 
     frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
 
-    if inner.height == 0 || inner.width == 0 {
-      return;
-    }
+    let w = area.width as usize;
+    let name_col = 18usize;
+    let badge_col = 8usize;
+    let desc_col = w.saturating_sub(name_col + badge_col + 4);
 
     let start = self.slash_scroll;
-    let end = (start + inner.height as usize).min(suggestions.len());
+    let end = (start + visible).min(suggestions.len());
 
-    let lines: Vec<Line> = suggestions
-      .iter()
-      .skip(start)
-      .take(end.saturating_sub(start))
-      .enumerate()
-      .map(|(i, spec)| {
-        let selected = start + i == self.slash_selected;
-        let style = if selected {
-          t.style_selection_text()
-        } else {
-          Style::default().fg(t.text_dim).bg(t.bg_chat)
-        };
-        let command_style = if selected {
-          t.style_selection_text()
-        } else {
-          Style::default().fg(t.accent).bg(t.bg_chat)
-        };
-        Line::from(vec![
-          Span::styled(" ", style),
-          Span::styled(
-            format!(
-              "{:<width$}",
-              spec.completion.trim_end(),
-              width = 20.min(inner.width.saturating_sub(2) as usize)
-            ),
-            command_style,
-          ),
-          Span::styled(spec.description.clone(), style),
-        ])
-      })
-      .collect();
+    // Separator line
+    let sep_fill = "─".repeat(w.saturating_sub(16));
+    let sep_line = Line::from(Span::styled(
+      format!("─── Commands ──{sep_fill}"),
+      Style::default().fg(t.border),
+    ));
+
+    let mut lines: Vec<Line> = vec![sep_line];
+
+    for (i, spec) in suggestions.iter().skip(start).take(end - start).enumerate() {
+      let selected = start + i == self.slash_selected;
+
+      let (arrow, name_style, desc_style) = if selected {
+        (
+          "→ ",
+          Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+          Style::default().fg(t.text),
+        )
+      } else {
+        (
+          "  ",
+          Style::default().fg(t.text),
+          Style::default().fg(t.text_dim),
+        )
+      };
+
+      let name = spec.command.trim_start_matches('/');
+      let name_padded = format!("{:<width$}", name, width = name_col);
+
+      let badge = if spec.badge.is_empty() {
+        String::new()
+      } else {
+        format!("[{}]", spec.badge)
+      };
+      let badge_padded = format!("{:<width$}", badge, width = badge_col);
+      let badge_style = Style::default().fg(t.text_dim);
+
+      let desc: String = spec.description.chars().take(desc_col).collect();
+
+      lines.push(Line::from(vec![
+        Span::styled(arrow, Style::default().fg(t.accent)),
+        Span::styled(name_padded, name_style),
+        Span::styled(badge_padded, badge_style),
+        Span::styled(desc, desc_style),
+      ]));
+    }
+
+    // Count line — right-aligned
+    let count_str = format!("({}/{})", self.slash_selected + 1, suggestions.len());
+    let padding = w.saturating_sub(count_str.len());
+    lines.push(Line::from(Span::styled(
+      format!("{}{}", " ".repeat(padding), count_str),
+      Style::default().fg(t.text_dim),
+    )));
 
     frame.render_widget(
       Paragraph::new(lines).style(Style::default().bg(t.bg_chat)),
-      inner,
+      area,
     );
   }
 

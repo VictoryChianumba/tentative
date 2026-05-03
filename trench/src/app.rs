@@ -269,6 +269,10 @@ pub struct App {
   pub discovery_intent: crate::discovery::intent::QueryIntent,
   /// When set by a slash command, overrides heuristic classification once.
   pub discovery_forced_intent: Option<crate::discovery::intent::QueryIntent>,
+  /// Selected row index in the discovery slash-command palette.
+  pub discovery_palette_selected: usize,
+  /// Scroll offset for the discovery palette (for when suggestions exceed visible rows).
+  pub discovery_palette_scroll: usize,
   pub search_query: String,
   pub search_active: bool,
   pub status_message: Option<String>,
@@ -451,6 +455,8 @@ impl App {
       discovery_force_new: false,
       discovery_intent: crate::discovery::intent::QueryIntent::default(),
       discovery_forced_intent: None,
+      discovery_palette_selected: 0,
+      discovery_palette_scroll: 0,
       search_query: String::new(),
       search_active: false,
       status_message: None,
@@ -1687,7 +1693,7 @@ mod tests {
       FeedItem {
         id: "5".into(),
         title: "open-instruct: finetuning LLMs at AllenAI".into(),
-        source_platform: SourcePlatform::PapersWithCode,
+        source_platform: SourcePlatform::Blog,
         content_type: ContentType::Repo,
         domain_tags: vec!["finetuning".into(), "rlhf".into()],
         signal: SignalLevel::Primary,
@@ -1697,7 +1703,7 @@ mod tests {
         RLHF used in Tulu 3, with full training configs."
           .into(),
         workflow_state: WorkflowState::DeepRead,
-        url: "https://paperswithcode.com/paper/open-instruct".into(),
+        url: "https://github.com/allenai/open-instruct".into(),
         upvote_count: 0,
         github_repo: None,
         github_owner: None,
@@ -1777,7 +1783,7 @@ mod tests {
         title:
           "vLLM v0.5 release notes — prefix caching and speculative decoding"
             .into(),
-        source_platform: SourcePlatform::PapersWithCode,
+        source_platform: SourcePlatform::Blog,
         content_type: ContentType::Repo,
         domain_tags: vec!["inference".into(), "serving".into()],
         signal: SignalLevel::Primary,
@@ -1912,7 +1918,7 @@ mod tests {
       FeedItem {
         id: "15".into(),
         title: "axolotl: one config to fine-tune them all".into(),
-        source_platform: SourcePlatform::PapersWithCode,
+        source_platform: SourcePlatform::Blog,
         content_type: ContentType::Repo,
         domain_tags: vec!["finetuning".into(), "tooling".into()],
         signal: SignalLevel::Tertiary,

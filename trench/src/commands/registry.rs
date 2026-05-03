@@ -39,6 +39,8 @@ pub struct CommandSpec {
   pub description: &'static str,
   pub category: CommandCategory,
   pub kind: CommandKind,
+  /// Show this command in the discovery search bar palette.
+  pub show_in_discovery: bool,
 }
 
 pub const COMMAND_SPECS: &[CommandSpec] = &[
@@ -49,6 +51,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Clear the current chat session view",
     category: CommandCategory::Discovery,
     kind: CommandKind::BuiltIn,
+    show_in_discovery: false,
   },
   CommandSpec {
     id: CommandId::Discover,
@@ -57,6 +60,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Find papers and sources for a topic",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::ClearDiscoveries,
@@ -65,6 +69,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Clear the discovery feed",
     category: CommandCategory::Discovery,
     kind: CommandKind::BuiltIn,
+    show_in_discovery: false,
   },
   CommandSpec {
     id: CommandId::AddArxivCategory,
@@ -73,6 +78,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Add an arXiv category permanently",
     category: CommandCategory::Sources,
     kind: CommandKind::BuiltIn,
+    show_in_discovery: false,
   },
   CommandSpec {
     id: CommandId::AddFeed,
@@ -81,14 +87,16 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Add an RSS feed permanently",
     category: CommandCategory::Sources,
     kind: CommandKind::BuiltIn,
+    show_in_discovery: false,
   },
   CommandSpec {
     id: CommandId::Sota,
     command: "/sota",
     completion: "/sota ",
-    description: "State-of-the-art results and benchmark comparison for a topic",
+    description: "State-of-the-art results and benchmark comparison",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::ReadingList,
@@ -97,6 +105,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Ordered learning path for a topic",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::Code,
@@ -105,6 +114,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Find implementations and code for a topic",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::Compare,
@@ -113,6 +123,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Side-by-side comparison of two approaches or models",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::Digest,
@@ -121,6 +132,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "What happened in AI/ML this week",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::Author,
@@ -129,6 +141,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Find all papers by a specific researcher",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::Trending,
@@ -137,16 +150,34 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     description: "Find trending papers on a topic",
     category: CommandCategory::Discovery,
     kind: CommandKind::Workflow,
+    show_in_discovery: true,
   },
   CommandSpec {
     id: CommandId::Watch,
     command: "/watch",
     completion: "/watch ",
-    description: "Planned: watch a topic over time",
+    description: "Coming soon: monitor a topic over time",
     category: CommandCategory::Planned,
     kind: CommandKind::Stub,
+    show_in_discovery: true,
   },
 ];
+
+pub fn discovery_slash_specs() -> Vec<ChatSlashCommandSpec> {
+  COMMAND_SPECS
+    .iter()
+    .filter(|spec| spec.show_in_discovery)
+    .map(|spec| ChatSlashCommandSpec {
+      command: spec.command.to_string(),
+      completion: spec.completion.to_string(),
+      description: spec.description.to_string(),
+      badge: match spec.kind {
+        CommandKind::Stub => "soon".to_string(),
+        _ => String::new(),
+      },
+    })
+    .collect()
+}
 
 pub fn chat_slash_specs() -> Vec<ChatSlashCommandSpec> {
   COMMAND_SPECS
@@ -155,6 +186,12 @@ pub fn chat_slash_specs() -> Vec<ChatSlashCommandSpec> {
       command: spec.command.to_string(),
       completion: spec.completion.to_string(),
       description: spec.description.to_string(),
+      badge: match spec.category {
+        CommandCategory::Discovery => "disc",
+        CommandCategory::Sources => "src",
+        CommandCategory::Planned => "soon",
+      }
+      .to_string(),
     })
     .collect()
 }

@@ -14,6 +14,7 @@ use crate::app::{
   App, AppView, DiscoverResult, FeedTab, FocusedReader, NotesTab, PaneId,
   ReaderTab, SourcesDetectState,
 };
+use crate::config::{self, CUSTOM_THEME_ROLES};
 use crate::models::{ContentType, SignalLevel, SourcePlatform, WorkflowState};
 use std::collections::HashSet;
 
@@ -25,8 +26,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
   let t_total = std::time::Instant::now();
   match app.view {
     AppView::Feed => draw_feed(frame, app),
-    AppView::Settings => draw_settings(frame, app),
+    AppView::Settings => {
+      draw_feed(frame, app);
+      draw_settings(frame, app);
+    }
     AppView::Sources => {
+      draw_feed(frame, app);
       draw_settings(frame, app);
       draw_sources_popup(frame, app);
     }
@@ -51,7 +56,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 fn draw_feed(frame: &mut Frame, app: &mut App) {
   let area = frame.area();
-  let theme = app.active_theme.theme();
+  let theme = app.theme();
   let margin = area.width / 20;
   let title_h = title_bar_height(area.width);
 
@@ -193,7 +198,7 @@ fn draw_title_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_compact_title_bar(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let inner = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
@@ -289,7 +294,7 @@ fn draw_compact_title_bar(frame: &mut Frame, app: &App, area: Rect) {
 // ── Search + filter row ────────────────────────────────────────────────────
 
 fn draw_search_row(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   // Row 0: content; row 1: separator
   let content_area = Rect { height: 1, ..area };
   let sep_area = Rect { y: area.y + 1, height: 1, ..area };
@@ -413,7 +418,7 @@ struct MainRowRects {
 }
 
 fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
-  let theme = app.active_theme.theme();
+  let theme = app.theme();
   let t = theme;
   // ── A2 State 3: dual-reader (left 50% | right 50%) ──────────────────────
   if app.reader_dual_active && app.reader_active {
@@ -739,10 +744,11 @@ fn draw_discoveries_with_searchbar(frame: &mut Frame, app: &mut App, area: Rect)
   }
 
   draw_discovery_searchbar(frame, app, bar_area);
+  draw_discovery_palette(frame, app, list_area);
 }
 
 fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let w = area.width as usize;
   let has_session = !app.discovery_session.is_empty();
   let intent_label = app.discovery_intent.label();
@@ -785,15 +791,17 @@ fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
   ]);
 
   let hint_text = if app.discovery_search_focused {
-    if has_session {
+    if app.discovery_query.starts_with('/') {
+      "Tab: complete  ↑↓: navigate  Enter: run  Esc: cancel"
+    } else if has_session {
       "Enter: refine  Ctrl+N: new search  Esc: unfocus"
     } else {
-      "Enter: search  Esc: unfocus"
+      "Enter: search  /: commands  Esc: unfocus"
     }
   } else if has_session {
     "Any key to refine  ·  Ctrl+N: new search"
   } else {
-    "Any key to focus  ·  /discover TOPIC from chat"
+    "Any key to focus  ·  / for commands"
   };
   let hint_line = Line::from(Span::styled(
     hint_text,
@@ -804,8 +812,102 @@ fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
   frame.render_widget(para, area);
 }
 
+fn draw_discovery_palette(frame: &mut Frame, app: &App, list_area: Rect) {
+  if !app.discovery_search_focused || !app.discovery_query.starts_with('/') {
+    return;
+  }
+
+  let all_specs = crate::commands::registry::discovery_slash_specs();
+  let query_lower = app.discovery_query.to_lowercase();
+  let suggestions: Vec<_> = all_specs
+    .iter()
+    .filter(|s| {
+      query_lower == "/" || s.command.starts_with(query_lower.as_str())
+    })
+    .collect();
+
+  if suggestions.is_empty() || list_area.height == 0 {
+    return;
+  }
+
+  let t = app.theme();
+  let w = list_area.width as usize;
+  let visible = suggestions.len().min(8);
+  let selected = app.discovery_palette_selected.min(suggestions.len() - 1);
+  let scroll = app.discovery_palette_scroll;
+  let start = scroll;
+  let end = (start + visible).min(suggestions.len());
+
+  // separator + rows + count
+  let height = (visible as u16 + 2).min(list_area.height);
+  let area = Rect {
+    x: list_area.x,
+    y: list_area.y + list_area.height.saturating_sub(height),
+    width: list_area.width,
+    height,
+  };
+
+  frame.render_widget(Clear, area);
+
+  let name_col = 16usize;
+  let badge_col = 7usize;
+  let desc_col = w.saturating_sub(name_col + badge_col + 4);
+
+  let sep_fill = "─".repeat(w.saturating_sub(16));
+  let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+    format!("─── Commands ──{sep_fill}"),
+    Style::default().fg(t.border),
+  ))];
+
+  for (i, spec) in suggestions.iter().skip(start).take(end - start).enumerate() {
+    let is_selected = start + i == selected;
+    let (arrow, name_style, desc_style) = if is_selected {
+      (
+        "→ ",
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        Style::default().fg(t.text),
+      )
+    } else {
+      (
+        "  ",
+        Style::default().fg(t.text),
+        Style::default().fg(t.text_dim),
+      )
+    };
+
+    let name = spec.command.trim_start_matches('/');
+    let name_padded = format!("{:<width$}", name, width = name_col);
+    let badge = if spec.badge.is_empty() {
+      String::new()
+    } else {
+      format!("[{}]", spec.badge)
+    };
+    let badge_padded = format!("{:<width$}", badge, width = badge_col);
+    let desc: String = spec.description.chars().take(desc_col).collect();
+
+    lines.push(Line::from(vec![
+      Span::styled(arrow, Style::default().fg(t.accent)),
+      Span::styled(name_padded, name_style),
+      Span::styled(badge_padded, Style::default().fg(t.text_dim)),
+      Span::styled(desc, desc_style),
+    ]));
+  }
+
+  let count_str = format!("({}/{})", selected + 1, suggestions.len());
+  let padding = w.saturating_sub(count_str.len());
+  lines.push(Line::from(Span::styled(
+    format!("{}{}", " ".repeat(padding), count_str),
+    Style::default().fg(t.text_dim),
+  )));
+
+  frame.render_widget(
+    Paragraph::new(lines).style(Style::default().bg(t.bg_chat)),
+    area,
+  );
+}
+
 fn draw_narrow_feed(frame: &mut Frame, app: &mut App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let viewport_rows = area.height as usize;
   let selected = app.active_selected_index();
   // Reserve space for prefix (2) + " — Type — Date" suffix (~20 chars).
@@ -959,7 +1061,7 @@ fn draw_notes_tab_bar(
 }
 
 fn draw_item_table(frame: &mut Frame, app: &mut App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let t_item_table = std::time::Instant::now();
   let header_style = Style::default().fg(t.header).add_modifier(Modifier::BOLD);
 
@@ -1262,7 +1364,7 @@ fn style_feed_title_lines(
 }
 
 fn draw_filter_panel(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let inner = area;
   let focused = app.filter_focus;
 
@@ -1466,7 +1568,7 @@ fn draw_filter_panel(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_details_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let t_details = std::time::Instant::now();
 
   let bottom_h = area.height * 38 / 100;
@@ -1983,7 +2085,7 @@ fn wrap_limited_ellipsis<'a>(
 // ── Footer ─────────────────────────────────────────────────────────────────
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let rows = Layout::default()
     .direction(Direction::Vertical)
     .constraints([Constraint::Length(1), Constraint::Length(1)])
@@ -2027,7 +2129,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn footer_command_line(app: &App) -> Line<'static> {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let ordinary = Style::default().fg(t.text_dim);
   let repo_style = Style::default().fg(t.success);
   let visible = app.visible_items().len();
@@ -2113,7 +2215,7 @@ fn quiet_popup_block(
 // ── A1: floating reader popup (Ldr+Enter) ─────────────────────────────────
 
 fn draw_reader_popup(frame: &mut Frame, app: &mut App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let desired_h = (area.height as u32 * 58 / 100) as u16;
   let popup_rect = popup_rect(area, 70, desired_h, 64, 14, 88);
 
@@ -2134,7 +2236,7 @@ fn draw_reader_popup(frame: &mut Frame, app: &mut App, area: Rect) {
 // ── A2 State 2: description popup over reader pane ────────────────────────
 
 fn draw_abstract_popup(frame: &mut Frame, app: &App) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let area = frame.area();
   let Some(item) = app.selected_item() else { return };
 
@@ -2189,7 +2291,7 @@ fn draw_abstract_popup(frame: &mut Frame, app: &App) {
 }
 
 fn draw_narrow_feed_details_popup(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let popup_h = (area.height * 40 / 100).max(6).min(area.height);
   let popup_w = area.width.saturating_sub(4).max(20);
   let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
@@ -2229,7 +2331,7 @@ fn draw_narrow_feed_details_popup(frame: &mut Frame, app: &App, area: Rect) {
 // ── A2 State 3: persistent bottom pane (feed list or details) ─────────────
 
 fn draw_reader_bottom_pane(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   const POPUP_H: u16 = 11; // border(2) + hint row(1) + sep(1) + content(7)
   let popup_w = (area.width as u32 * 60 / 100) as u16;
   let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
@@ -2266,7 +2368,7 @@ fn draw_reader_bottom_pane(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_bottom_pane_details(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let sel = app.reader_feed_popup_selected;
   let items = app.items_for_tab();
   let Some(item) = items.get(sel) else { return };
@@ -2281,7 +2383,7 @@ fn draw_bottom_pane_details(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_bottom_pane_feed(frame: &mut Frame, app: &App, area: Rect) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let items = app.items_for_tab();
   let sel = app.reader_feed_popup_selected;
   let max_visible = area.height as usize;
@@ -2322,22 +2424,9 @@ fn truncate_str(s: &str, max: usize) -> String {
 // ── Sources popup ──────────────────────────────────────────────────────────
 
 fn draw_sources_popup(frame: &mut Frame, app: &App) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let area = frame.area();
-  let popup_w =
-    (area.width as u32 * 58 / 100).max(72).min(area.width as u32) as u16;
-  let content_rows = 6
-    + app.sources_popup_arxiv_cats().len() as u16
-    + crate::config::PREDEFINED_SOURCES.len() as u16
-    + app.config.sources.custom_feeds.len().max(1) as u16;
-  let popup_h = content_rows
-    .saturating_add(7)
-    .max(20)
-    .min((area.height as u32 * 70 / 100) as u16)
-    .min(area.height);
-  let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-  let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-  let popup_area = ratatui::layout::Rect::new(x, y, popup_w, popup_h);
+  let popup_area = settings_modal_rect(area);
 
   frame.render_widget(Clear, popup_area);
 
@@ -2516,121 +2605,55 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
 // ── Settings view ──────────────────────────────────────────────────────────
 
 fn draw_settings(frame: &mut Frame, app: &App) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let area = frame.area();
+  let popup = settings_modal_rect(area);
+  frame.render_widget(Clear, popup);
 
-  let block = Block::default()
-    .borders(Borders::ALL)
-    .title(Span::styled(
-      " Settings ",
-      Style::default().fg(t.text).add_modifier(Modifier::BOLD),
-    ))
-    .border_style(Style::default().fg(t.border));
+  let block = settings_card_block(" Settings ", &t);
+  let inner = block.inner(popup);
+  frame.render_widget(block, popup);
 
-  let inner = block.inner(area);
-  frame.render_widget(block, area);
-
-  let w = inner.width as usize;
-  let box_inner_w = w.saturating_sub(6);
-  let hrule: String = "─".repeat(w.saturating_sub(2));
-  let box_h_bar: String = "─".repeat(box_inner_w + 2);
-  let box_top = format!("  ┌{}┐", box_h_bar);
-  let box_bot = format!("  └{}┘", box_h_bar);
+  if inner.width < 44 || inner.height < 14 {
+    frame.render_widget(
+      Paragraph::new(Span::styled(
+        " terminal too small for settings ",
+        Style::default().fg(t.text_dim).bg(t.bg_panel),
+      ))
+      .alignment(Alignment::Center),
+      inner,
+    );
+    return;
+  }
 
   let mask_str = |s: &str| -> String { "*".repeat(s.chars().count()) };
 
-  let pad_to = |s: String| -> String {
+  let secret_status = |s: &str| -> String {
     let n = s.chars().count();
-    if n >= box_inner_w {
-      s.chars().take(box_inner_w).collect()
-    } else {
-      format!("{}{}", s, " ".repeat(box_inner_w - n))
-    }
-  };
-
-  let gh_display = if app.settings_editing && app.settings_field == 0 {
-    pad_to(format!("{}_", mask_str(&app.settings_edit_buf)))
-  } else {
-    pad_to(mask_str(&app.settings_github_token))
-  };
-  let s2_display = if app.settings_editing && app.settings_field == 1 {
-    pad_to(format!("{}_", mask_str(&app.settings_edit_buf)))
-  } else {
-    pad_to(mask_str(&app.settings_s2_key))
-  };
-
-  let border_color = |field: usize, editing: bool| -> Color {
-    if app.settings_field == field {
-      if editing {
-        t.success
-      } else {
-        t.accent
-      }
-    } else {
-      t.border
-    }
-  };
-
-  let gh_col = border_color(0, app.settings_editing);
-  let s2_col = border_color(1, app.settings_editing);
-  let claude_col = border_color(2, app.settings_editing);
-  let openai_col = border_color(3, app.settings_editing);
-
-  let claude_display = if app.settings_editing && app.settings_field == 2 {
-    pad_to(format!("{}_", mask_str(&app.settings_edit_buf)))
-  } else {
-    pad_to(mask_str(&app.settings_claude_key))
-  };
-  let openai_display = if app.settings_editing && app.settings_field == 3 {
-    pad_to(format!("{}_", mask_str(&app.settings_edit_buf)))
-  } else {
-    pad_to(mask_str(&app.settings_openai_key))
-  };
-  let claude_count = {
-    let n = app.settings_claude_key.chars().count();
     if n == 0 {
-      "  not set".to_string()
+      "not set".to_string()
     } else {
-      format!("  {n} characters stored")
-    }
-  };
-  let openai_count = {
-    let n = app.settings_openai_key.chars().count();
-    if n == 0 {
-      "  not set".to_string()
-    } else {
-      format!("  {n} characters stored")
+      format!("{n} chars stored")
     }
   };
 
-  let box_mid = |content: String, col: Color| -> Line<'static> {
-    Line::from(vec![
-      Span::styled("  │ ", Style::default().fg(col)),
-      Span::raw(content),
-      Span::styled(" │", Style::default().fg(col)),
-    ])
-  };
-
-  let box_line = |s: String, col: Color| -> Line<'static> {
-    Line::from(Span::styled(s, Style::default().fg(col)))
-  };
-
-  let gh_count = {
-    let n = app.settings_github_token.chars().count();
-    if n == 0 {
-      "  not set".to_string()
+  let secret_value = |field: usize, stored: &str| -> String {
+    if app.settings_editing && app.settings_field == field {
+      format!("{}_", mask_str(&app.settings_edit_buf))
+    } else if stored.is_empty() {
+      "not set".to_string()
     } else {
-      format!("  {n} characters stored")
+      mask_str(stored)
     }
   };
-  let s2_count = {
-    let n = app.settings_s2_key.chars().count();
-    if n == 0 {
-      "  not set".to_string()
-    } else {
-      format!("  {n} characters stored")
-    }
-  };
+
+  let selected_style = t.style_selection_text();
+  let header_style = Style::default().fg(t.header).add_modifier(Modifier::BOLD);
+  let text_style = Style::default().fg(t.text);
+  let dim_style = Style::default().fg(t.text_dim);
+  let accent_style = Style::default().fg(t.accent);
+  let success_style = Style::default().fg(t.success);
+  let bg_style = Style::default().bg(t.bg_panel);
 
   let cats = app.config.sources.arxiv_categories.join(", ");
   let mut active: Vec<String> = app
@@ -2651,133 +2674,192 @@ fn draw_settings(frame: &mut Frame, app: &App) {
     custom_count.to_string()
   };
 
-  let gray = Style::default().fg(t.text_dim);
-  let white = Style::default().fg(t.text);
-  let bold_white = Style::default().fg(t.header).add_modifier(Modifier::BOLD);
+  let body_footer = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Min(0), Constraint::Length(2)])
+    .split(inner);
+  let body = body_footer[0];
+  let footer_area = body_footer[1];
+
+  let columns = if body.width >= 96 {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(31), Constraint::Min(0)])
+      .split(body)
+  } else {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(0), Constraint::Min(0)])
+      .split(body)
+  };
+
+  if columns[0].width > 0 {
+    let rail = columns[0];
+    let rail_rule = "─".repeat(rail.width.saturating_sub(4) as usize);
+    let mut rail_lines = vec![
+      Line::from(""),
+      Line::from(Span::styled("  Configuration", header_style)),
+      Line::from(Span::styled(format!("  {rail_rule}"), dim_style)),
+      Line::from(""),
+      Line::from(vec![
+        Span::styled("  GitHub          ", dim_style),
+        Span::styled(secret_status(&app.settings_github_token), text_style),
+      ]),
+      Line::from(vec![
+        Span::styled("  Semantic Scholar", dim_style),
+        Span::styled(
+          format!(" {}", secret_status(&app.settings_s2_key)),
+          text_style,
+        ),
+      ]),
+      Line::from(vec![
+        Span::styled("  Claude          ", dim_style),
+        Span::styled(secret_status(&app.settings_claude_key), text_style),
+      ]),
+      Line::from(vec![
+        Span::styled("  OpenAI          ", dim_style),
+        Span::styled(secret_status(&app.settings_openai_key), text_style),
+      ]),
+      Line::from(""),
+      Line::from(Span::styled("  Sources", header_style)),
+      Line::from(Span::styled(format!("  {rail_rule}"), dim_style)),
+      Line::from(vec![
+        Span::styled("  arXiv categories", dim_style),
+        Span::styled(format!(" {}", truncate(&cats, 12)), text_style),
+      ]),
+      Line::from(vec![
+        Span::styled("  Active sources  ", dim_style),
+        Span::styled(format!(" {}", active.len()), text_style),
+      ]),
+      Line::from(vec![
+        Span::styled("  Custom feeds    ", dim_style),
+        Span::styled(format!(" {custom_str}"), text_style),
+      ]),
+    ];
+
+    if app.settings_save_time.is_some() {
+      rail_lines.push(Line::from(""));
+      rail_lines.push(Line::from(Span::styled("  Saved.", success_style)));
+    }
+
+    frame.render_widget(
+      Paragraph::new(rail_lines).wrap(Wrap { trim: false }).style(bg_style),
+      rail,
+    );
+  }
+
+  let settings_area = columns[1];
+  let row_width = settings_area.width.saturating_sub(2) as usize;
+  let value_width = row_width.saturating_sub(32);
+  let row = |field: usize, label: &str, value: String| -> Line<'static> {
+    let selected = app.settings_field == field;
+    let marker = if selected { ">" } else { " " };
+    let style = if selected {
+      if app.settings_editing {
+        success_style
+      } else {
+        selected_style
+      }
+    } else {
+      text_style
+    };
+    let label = truncate(label, 24);
+    let value = truncate(&value, value_width);
+    let content = format!(
+      " {marker} {label:<24} {value:<value_width$}",
+      value_width = value_width
+    );
+    Line::from(Span::styled(content, style))
+  };
+
+  let hint = |field: usize, text: &str| -> Line<'static> {
+    let prefix = if app.settings_field == field { "   " } else { "   " };
+    Line::from(Span::styled(
+      format!("{prefix}{}", truncate(text, row_width.saturating_sub(3))),
+      dim_style,
+    ))
+  };
 
   let mut lines: Vec<Line> = vec![
     Line::from(""),
-    Line::from(Span::styled("  API Keys", bold_white)),
-    Line::from(Span::styled(format!("  {hrule}"), gray)),
+    Line::from(Span::styled("  API Keys", header_style)),
+    row(0, "GitHub token", secret_value(0, &app.settings_github_token)),
+    hint(0, "Repo viewer access"),
+    row(1, "Semantic Scholar key", secret_value(1, &app.settings_s2_key)),
+    hint(1, "Improves paper metadata"),
     Line::from(""),
-    Line::from(Span::styled("  GitHub token", white)),
-    box_line(box_top.clone(), gh_col),
-    box_mid(gh_display, gh_col),
-    box_line(box_bot.clone(), gh_col),
-    Line::from(Span::styled(gh_count, gray)),
-    Line::from(Span::styled("  Used for the repo viewer", gray)),
+    Line::from(Span::styled("  Chat", header_style)),
+    row(2, "Claude API key", secret_value(2, &app.settings_claude_key)),
+    hint(2, "Used for claude: chat routing"),
+    row(3, "OpenAI API key", secret_value(3, &app.settings_openai_key)),
+    hint(3, "Used for openai: chat routing"),
+    row(4, "Default provider", app.settings_default_chat_provider.clone()),
+    hint(4, "Enter toggles provider"),
     Line::from(""),
-    Line::from(Span::styled("  Semantic Scholar API key", white)),
-    box_line(box_top.clone(), s2_col),
-    box_mid(s2_display, s2_col),
-    box_line(box_bot.clone(), s2_col),
-    Line::from(Span::styled(s2_count, gray)),
-    Line::from(Span::styled(
-      "  Improves paper metadata · semanticscholar.org/product/api",
-      gray,
-    )),
+    Line::from(Span::styled("  Appearance", header_style)),
+    row(5, "Theme", app.active_theme_name()),
+    hint(5, "Enter opens the theme picker"),
     Line::from(""),
-    Line::from(Span::styled("  Chat", bold_white)),
-    Line::from(Span::styled(format!("  {hrule}"), gray)),
-    Line::from(""),
-    Line::from(Span::styled("  Claude API key", white)),
-    box_line(box_top.clone(), claude_col),
-    box_mid(claude_display, claude_col),
-    box_line(box_bot.clone(), claude_col),
-    Line::from(Span::styled(claude_count, gray)),
-    Line::from(Span::styled("  Used for claude: prefix in chat", gray)),
-    Line::from(""),
-    Line::from(Span::styled("  OpenAI API key", white)),
-    box_line(box_top, openai_col),
-    box_mid(openai_display, openai_col),
-    box_line(box_bot, openai_col),
-    Line::from(Span::styled(openai_count, gray)),
-    Line::from(Span::styled("  Used for openai: prefix in chat", gray)),
-    Line::from(""),
-    Line::from(Span::styled("  Default chat provider", white)),
+    Line::from(Span::styled("  Sources", header_style)),
     Line::from(vec![
+      Span::styled("  arXiv categories  ", dim_style),
+      Span::styled(truncate(&cats, row_width.saturating_sub(21)), text_style),
+    ]),
+    Line::from(vec![
+      Span::styled("  Active sources    ", dim_style),
       Span::styled(
-        "  [enter to toggle]  ",
-        if app.settings_field == 4 {
-          Style::default().fg(t.accent)
-        } else {
-          gray
-        },
-      ),
-      Span::styled(
-        app.settings_default_chat_provider.clone(),
-        if app.settings_field == 4 {
-          Style::default().fg(t.success).add_modifier(Modifier::BOLD)
-        } else {
-          white
-        },
+        truncate(&active_str, row_width.saturating_sub(21)),
+        text_style,
       ),
     ]),
-    Line::from(""),
-    Line::from(Span::styled("  Theme", white)),
     Line::from(vec![
-      Span::styled(
-        "  [enter to choose] ",
-        if app.settings_field == 5 {
-          Style::default().fg(t.accent)
-        } else {
-          gray
-        },
-      ),
-      Span::styled(
-        app.active_theme.info().name.to_string(),
-        if app.settings_field == 5 {
-          Style::default().fg(t.success).add_modifier(Modifier::BOLD)
-        } else {
-          white
-        },
-      ),
-    ]),
-    Line::from(""),
-    Line::from(Span::styled("  Sources", bold_white)),
-    Line::from(Span::styled(format!("  {hrule}"), gray)),
-    Line::from(vec![
-      Span::styled("  arXiv categories : ", gray),
-      Span::styled(cats, white),
+      Span::styled("  Custom feeds      ", dim_style),
+      Span::styled(custom_str, text_style),
     ]),
     Line::from(vec![
-      Span::styled("  Active sources   : ", gray),
-      Span::styled(active_str, white),
+      Span::styled("  p", accent_style),
+      Span::styled(" manages source subscriptions", dim_style),
     ]),
-    Line::from(vec![
-      Span::styled("  Custom feeds     : ", gray),
-      Span::styled(custom_str, white),
-    ]),
-    Line::from(Span::styled("  p: manage sources", gray)),
-    Line::from(""),
   ];
 
   if app.settings_save_time.is_some() {
-    lines.push(Line::from(Span::styled(
-      "  Saved.",
-      Style::default().fg(t.success),
-    )));
-  } else {
-    lines.push(Line::from(Span::styled(
-      "  esc / q: back · enter: edit · s / S: save",
-      gray,
-    )));
+    lines.push(Line::from(Span::styled("  Saved.", success_style)));
   }
 
-  let para = Paragraph::new(lines).wrap(Wrap { trim: false });
-  frame.render_widget(para, inner);
+  let selected_line = match app.settings_field {
+    0 => 2,
+    1 => 4,
+    2 => 8,
+    3 => 10,
+    4 => 12,
+    5 => 16,
+    _ => 0,
+  };
+  let viewport_rows = settings_area.height as usize;
+  let scroll = if selected_line >= viewport_rows.saturating_sub(2) {
+    selected_line.saturating_sub(viewport_rows.saturating_sub(3))
+  } else {
+    0
+  };
+
+  let para = Paragraph::new(lines)
+    .wrap(Wrap { trim: false })
+    .scroll((scroll as u16, 0))
+    .style(bg_style);
+  frame.render_widget(para, settings_area);
+
+  let footer_text = if app.settings_editing {
+    "  enter apply edit · esc cancel edit"
+  } else {
+    "  j/k navigate · enter edit/select · s save · p sources · esc/q back"
+  };
+  draw_card_footer(frame, footer_area, &t, footer_text);
 }
 
 fn draw_theme_picker(frame: &mut Frame, app: &App) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let area = frame.area();
-  let popup_w =
-    (area.width as u32 * 56 / 100).max(44).min(area.width as u32) as u16;
-  let popup_h =
-    (area.height as u32 * 62 / 100).max(16).min(area.height as u32) as u16;
-  let x = area.x + area.width.saturating_sub(popup_w) / 2;
-  let y = area.y + area.height.saturating_sub(popup_h) / 2;
-  let popup = Rect::new(x, y, popup_w, popup_h);
+  let popup = settings_modal_rect(area);
 
   frame.render_widget(Clear, popup);
   let block = Block::default()
@@ -2801,25 +2883,17 @@ fn draw_theme_picker(frame: &mut Frame, app: &App) {
   let footer_area = Rect { y: inner.y + list_h, height: footer_h, ..inner };
 
   let all = ui_theme::ThemeId::all();
-  let scroll = app.theme_picker_scroll.min(all.len().saturating_sub(1));
-  let end = (scroll + list_h as usize).min(all.len());
-  let mut lines: Vec<Line> = Vec::new();
-  let mut last_group: Option<ui_theme::ThemeGroup> =
-    if scroll == 0 { None } else { Some(all[scroll - 1].info().group) };
+  let mut rows: Vec<(Option<usize>, Line)> = Vec::new();
+  let mut last_group: Option<ui_theme::ThemeGroup> = None;
 
-  for (idx, id) in
-    all.iter().enumerate().skip(scroll).take(end.saturating_sub(scroll))
-  {
+  for (idx, id) in all.iter().enumerate() {
     let info = id.info();
     if last_group != Some(info.group) {
-      lines.push(Line::from(Span::styled(
+      rows.push((None, Line::from(Span::styled(
         format!("  {}", info.group.label()),
         Style::default().fg(t.header).add_modifier(Modifier::BOLD),
-      )));
+      ))));
       last_group = Some(info.group);
-      if lines.len() >= list_h as usize {
-        break;
-      }
     }
 
     let theme = id.theme();
@@ -2830,7 +2904,7 @@ fn draw_theme_picker(frame: &mut Frame, app: &App) {
       Style::default().fg(t.text)
     };
     let marker = if selected { ">" } else { " " };
-    lines.push(Line::from(vec![
+    rows.push((Some(idx), Line::from(vec![
       Span::styled(format!(" {marker} "), row_style),
       Span::styled(format!("{:<20}", info.name), row_style),
       swatch(theme.accent),
@@ -2841,12 +2915,70 @@ fn draw_theme_picker(frame: &mut Frame, app: &App) {
       swatch(theme.warning),
       swatch(theme.error),
       Span::styled(format!("  {}", info.id), Style::default().fg(t.text_dim)),
-    ]));
-
-    if lines.len() >= list_h as usize {
-      break;
-    }
+    ])));
   }
+
+  let custom_start = all.len();
+  rows.push((None, Line::from("")));
+  rows.push((None, Line::from(Span::styled(
+    "  Custom",
+    Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+  ))));
+
+  for (idx, custom) in app.config.custom_themes.iter().enumerate() {
+    let row_idx = custom_start + idx;
+    let theme = custom.to_theme();
+    let selected = row_idx == app.theme_picker_cursor;
+    let row_style = if selected {
+      t.style_selection_text()
+    } else {
+      Style::default().fg(t.text)
+    };
+    let marker = if selected { ">" } else { " " };
+    rows.push((Some(row_idx), Line::from(vec![
+      Span::styled(format!(" {marker} "), row_style),
+      Span::styled(format!("{:<20}", custom.name), row_style),
+      swatch(theme.accent),
+      swatch(theme.header),
+      swatch(theme.text_dim),
+      swatch(theme.bg_selection),
+      swatch(theme.success),
+      swatch(theme.warning),
+      swatch(theme.error),
+      Span::styled(
+        format!("  based on {}", custom.base.info().name),
+        Style::default().fg(t.text_dim),
+      ),
+    ])));
+  }
+
+  let new_row = custom_start + app.config.custom_themes.len();
+  let selected = new_row == app.theme_picker_cursor;
+  let row_style = if selected {
+    t.style_selection_text()
+  } else {
+    Style::default().fg(t.text_dim)
+  };
+  let marker = if selected { ">" } else { " " };
+  rows.push((Some(new_row), Line::from(vec![
+    Span::styled(format!(" {marker} "), row_style),
+    Span::styled("+ New custom theme", row_style),
+  ])));
+
+  let selected_line = rows
+    .iter()
+    .position(|(idx, _)| *idx == Some(app.theme_picker_cursor))
+    .unwrap_or(0);
+  let max_start = rows.len().saturating_sub(list_h as usize);
+  let mut start = app.theme_picker_scroll.min(max_start);
+  if selected_line < start {
+    start = selected_line;
+  } else if selected_line >= start + list_h as usize {
+    start = selected_line.saturating_sub(list_h as usize - 1);
+  }
+  start = start.min(max_start);
+  let lines: Vec<Line> =
+    rows.into_iter().skip(start).take(list_h as usize).map(|(_, line)| line).collect();
 
   frame.render_widget(
     Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
@@ -2855,15 +2987,370 @@ fn draw_theme_picker(frame: &mut Frame, app: &App) {
 
   frame.render_widget(
     Paragraph::new(Span::styled(
-      " j/k: preview  enter: select  esc: cancel",
+      " j/k: preview  enter: select/new  e: edit  d: delete  esc: cancel",
       Style::default().fg(t.text_dim).bg(t.bg_popup),
     )),
     footer_area,
   );
+
+  if app.custom_theme_editor.is_some() {
+    draw_custom_theme_editor(frame, app);
+  }
 }
 
 fn swatch(color: Color) -> Span<'static> {
   Span::styled("  ", Style::default().bg(color))
+}
+
+fn settings_modal_rect(area: Rect) -> Rect {
+  let popup_w =
+    (area.width as u32 * 72 / 100).max(72).min(area.width as u32) as u16;
+  let popup_h =
+    (area.height as u32 * 74 / 100).max(22).min(area.height as u32) as u16;
+  let x = area.x + area.width.saturating_sub(popup_w) / 2;
+  let y = area.y + area.height.saturating_sub(popup_h) / 2;
+  Rect::new(x, y, popup_w, popup_h)
+}
+
+fn settings_card_block(
+  title: &'static str,
+  t: &crate::theme::Theme,
+) -> Block<'static> {
+  Block::default()
+    .borders(Borders::ALL)
+    .title(Span::styled(
+      title,
+      Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+    ))
+    .border_style(Style::default().fg(t.border))
+    .style(Style::default().bg(t.bg_panel))
+}
+
+fn draw_card_footer(
+  frame: &mut Frame,
+  area: Rect,
+  t: &crate::theme::Theme,
+  text: &'static str,
+) {
+  let footer_rule = "─".repeat(area.width as usize);
+  let footer = Paragraph::new(vec![
+    Line::from(Span::styled(footer_rule, Style::default().fg(t.border))),
+    Line::from(Span::styled(
+      text,
+      Style::default().fg(t.text_dim).bg(t.bg_panel),
+    )),
+  ])
+  .style(Style::default().bg(t.bg_panel));
+  frame.render_widget(footer, area);
+}
+
+fn draw_custom_theme_editor(frame: &mut Frame, app: &App) {
+  let Some(editor) = app.custom_theme_editor.as_ref() else {
+    return;
+  };
+  let t = editor.theme.to_theme();
+  let area = frame.area();
+  let popup = settings_modal_rect(area);
+
+  frame.render_widget(Clear, popup);
+  let title = if editor.is_new { " New Custom Theme " } else { " Edit Custom Theme " };
+  let block = Block::default()
+    .borders(Borders::ALL)
+    .title(Span::styled(
+      title,
+      Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+    ))
+    .border_style(Style::default().fg(t.border_active))
+    .style(Style::default().bg(t.bg_popup));
+  let inner = block.inner(popup);
+  frame.render_widget(block, popup);
+
+  if inner.width < 20 || inner.height < 8 {
+    return;
+  }
+
+  let footer_h = 2.min(inner.height);
+  let body_h = inner.height.saturating_sub(footer_h);
+  let body = Rect { height: body_h, ..inner };
+  let footer = Rect { y: inner.y + body_h, height: footer_h, ..inner };
+
+  if editor.mode == crate::app::CustomThemeEditorMode::DeleteConfirm {
+    let lines = vec![
+      Line::from(""),
+      Line::from(vec![
+        Span::styled("  Delete ", Style::default().fg(t.warning)),
+        Span::styled(editor.theme.name.clone(), Style::default().fg(t.text).add_modifier(Modifier::BOLD)),
+        Span::styled("?", Style::default().fg(t.warning)),
+      ]),
+      Line::from(""),
+      Line::from(Span::styled("  y: delete  n / esc: cancel", Style::default().fg(t.text_dim))),
+    ];
+    frame.render_widget(
+      Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
+      body,
+    );
+    return;
+  }
+
+  let cols = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Length(36), Constraint::Min(34)])
+    .split(body);
+
+  draw_custom_theme_roles(frame, cols[0], app);
+  draw_custom_theme_palette(frame, cols[1], app);
+
+  let footer_text = match editor.mode {
+    crate::app::CustomThemeEditorMode::Name => {
+      " enter: save name  esc: cancel"
+    }
+    crate::app::CustomThemeEditorMode::Hex => {
+      " enter: apply hex  esc: cancel"
+    }
+    _ => {
+      " space: apply color  h/l: hue  [/]: shade  x: hex  n: rename  r: reset  s/enter: save"
+    }
+  };
+  frame.render_widget(
+    Paragraph::new(Span::styled(
+      footer_text,
+      Style::default().fg(t.text_dim).bg(t.bg_popup),
+    )),
+    footer,
+  );
+}
+
+fn draw_custom_theme_roles(frame: &mut Frame, area: Rect, app: &App) {
+  let Some(editor) = app.custom_theme_editor.as_ref() else {
+    return;
+  };
+  let t = editor.theme.to_theme();
+  let mut lines = vec![
+    Line::from(vec![
+      Span::styled("  Name  ", Style::default().fg(t.text_dim)),
+      Span::styled(editor.theme.name.clone(), Style::default().fg(t.text).add_modifier(Modifier::BOLD)),
+    ]),
+    Line::from(vec![
+      Span::styled("  Base  ", Style::default().fg(t.text_dim)),
+      Span::styled(editor.theme.base.info().name, Style::default().fg(t.text_dim)),
+    ]),
+    Line::from(""),
+  ];
+
+  for (idx, role) in CUSTOM_THEME_ROLES.iter().enumerate() {
+    let selected = idx == editor.role_cursor;
+    let style = if selected {
+      t.style_selection_text()
+    } else {
+      Style::default().fg(t.text)
+    };
+    let marker = if selected { ">" } else { " " };
+    let value = editor.theme.colors.get_role(role.key).unwrap_or("#000000");
+    lines.push(Line::from(vec![
+      Span::styled(format!(" {marker} "), style),
+      Span::styled(format!("{:<16}", role.label), style),
+      color_swatch_from_hex(value),
+      Span::styled(format!(" {value}"), Style::default().fg(t.text_dim)),
+    ]));
+  }
+
+  frame.render_widget(
+    Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
+    area,
+  );
+}
+
+fn draw_custom_theme_palette(frame: &mut Frame, area: Rect, app: &App) {
+  let Some(editor) = app.custom_theme_editor.as_ref() else {
+    return;
+  };
+  let t = editor.theme.to_theme();
+  let role = CUSTOM_THEME_ROLES[editor.role_cursor.min(CUSTOM_THEME_ROLES.len() - 1)];
+  let current = editor.theme.colors.get_role(role.key).unwrap_or("#000000");
+  let mut lines = Vec::new();
+
+  match editor.mode {
+    crate::app::CustomThemeEditorMode::Name => {
+      lines.push(Line::from(Span::styled("Rename theme", Style::default().fg(t.header).add_modifier(Modifier::BOLD))));
+      lines.push(Line::from(""));
+      lines.push(Line::from(vec![
+        Span::styled("  ", Style::default().bg(t.bg_input)),
+        Span::styled(editor.edit_buf.clone(), Style::default().fg(t.text).bg(t.bg_input)),
+        Span::styled(" ", Style::default().fg(t.cursor_fg).bg(t.cursor_bg)),
+      ]));
+    }
+    crate::app::CustomThemeEditorMode::Hex => {
+      lines.push(Line::from(Span::styled(format!("Hex for {}", role.label), Style::default().fg(t.header).add_modifier(Modifier::BOLD))));
+      lines.push(Line::from(""));
+      lines.push(Line::from(vec![
+        Span::styled("  ", Style::default().bg(t.bg_input)),
+        Span::styled(editor.edit_buf.clone(), Style::default().fg(t.text).bg(t.bg_input)),
+        Span::styled(" ", Style::default().fg(t.cursor_fg).bg(t.cursor_bg)),
+      ]));
+    }
+    _ => {
+      lines.push(Line::from(vec![
+        Span::styled("Editing ", Style::default().fg(t.text_dim)),
+        Span::styled(role.label, Style::default().fg(t.header).add_modifier(Modifier::BOLD)),
+        Span::styled("  current ", Style::default().fg(t.text_dim)),
+        color_swatch_from_hex(current),
+        Span::styled(format!(" {current}"), Style::default().fg(t.text_dim)),
+        Span::styled("  picker ", Style::default().fg(t.text_dim)),
+        palette_swatch_from_hex(selected_palette_view_hex(editor), true),
+        Span::styled(
+          format!(" {}", selected_palette_view_hex(editor)),
+          Style::default().fg(t.text_dim),
+        ),
+      ]));
+      lines.push(Line::from(""));
+      for (shade_idx, row) in THEME_PALETTE_VIEW.iter().enumerate() {
+        let mut spans = Vec::new();
+        spans.push(Span::styled("  ", Style::default().fg(t.text_dim)));
+        for (hue_idx, hex) in row.iter().enumerate() {
+          let selected = shade_idx == editor.shade_cursor && hue_idx == editor.hue_cursor;
+          spans.push(palette_swatch_from_hex(hex, selected));
+        }
+        lines.push(Line::from(spans));
+      }
+      lines.push(Line::from(""));
+      lines.push(selection_contrast_line(&editor.theme));
+      lines.push(Line::from(""));
+      lines.push(Line::from(vec![
+        Span::styled("Preview  ", Style::default().fg(t.text_dim)),
+        Span::styled("Header", Style::default().fg(t.header).add_modifier(Modifier::BOLD)),
+        Span::styled("  normal text  ", Style::default().fg(t.text)),
+        Span::styled("dim text  ", Style::default().fg(t.text_dim)),
+        Span::styled(" selected row ", t.style_selection_text()),
+      ]));
+      lines.push(Line::from(vec![
+        Span::styled("Status   ", Style::default().fg(t.text_dim)),
+        Span::styled("v repo  ", Style::default().fg(t.success)),
+        Span::styled("warning  ", Style::default().fg(t.warning)),
+        Span::styled("error", Style::default().fg(t.error)),
+      ]));
+    }
+  }
+
+  frame.render_widget(
+    Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(t.bg_popup)),
+    area,
+  );
+}
+
+const THEME_PALETTE_VIEW: &[&[&str]] = &[
+  &[
+    "#F8FAFC", "#F7FEE7", "#FEFCE8", "#FFFBEB", "#FFF7ED", "#FFF1F2",
+    "#FEF2F2", "#FDF2F8", "#FDF4FF", "#FAF5FF", "#F5F3FF", "#EEF2FF",
+    "#EFF6FF", "#F0F9FF", "#ECFEFF", "#F0FDFA",
+  ],
+  &[
+    "#E2E8F0", "#ECFCCB", "#FEF9C3", "#FEF3C7", "#FFEDD5", "#FFE4E6",
+    "#FEE2E2", "#FCE7F3", "#FAE8FF", "#F3E8FF", "#EDE9FE", "#E0E7FF",
+    "#DBEAFE", "#E0F2FE", "#CFFAFE", "#CCFBF1",
+  ],
+  &[
+    "#CBD5E1", "#D9F99D", "#FEF08A", "#FDE68A", "#FED7AA", "#FECDD3",
+    "#FECACA", "#FBCFE8", "#F5D0FE", "#E9D5FF", "#DDD6FE", "#C7D2FE",
+    "#BFDBFE", "#BAE6FD", "#A5F3FC", "#99F6E4",
+  ],
+  &[
+    "#94A3B8", "#BEF264", "#FDE047", "#FCD34D", "#FDBA74", "#FDA4AF",
+    "#FCA5A5", "#F9A8D4", "#F0ABFC", "#D8B4FE", "#C4B5FD", "#A5B4FC",
+    "#93C5FD", "#7DD3FC", "#67E8F9", "#5EEAD4",
+  ],
+  &[
+    "#64748B", "#A3E635", "#FACC15", "#F59E0B", "#FB923C", "#FB7185",
+    "#F87171", "#F472B6", "#E879F9", "#C084FC", "#A78BFA", "#818CF8",
+    "#60A5FA", "#38BDF8", "#22D3EE", "#2DD4BF",
+  ],
+  &[
+    "#475569", "#84CC16", "#EAB308", "#D97706", "#F97316", "#F43F5E",
+    "#EF4444", "#EC4899", "#D946EF", "#A855F7", "#8B5CF6", "#6366F1",
+    "#3B82F6", "#0EA5E9", "#06B6D4", "#14B8A6",
+  ],
+  &[
+    "#334155", "#65A30D", "#CA8A04", "#B45309", "#EA580C", "#E11D48",
+    "#DC2626", "#DB2777", "#C026D3", "#9333EA", "#7C3AED", "#4F46E5",
+    "#2563EB", "#0284C7", "#0891B2", "#0D9488",
+  ],
+  &[
+    "#1E293B", "#4D7C0F", "#A16207", "#92400E", "#C2410C", "#BE123C",
+    "#B91C1C", "#BE185D", "#A21CAF", "#7E22CE", "#6D28D9", "#4338CA",
+    "#1D4ED8", "#0369A1", "#0E7490", "#0F766E",
+  ],
+  &[
+    "#0F172A", "#3F6212", "#854D0E", "#78350F", "#9A3412", "#9F1239",
+    "#991B1B", "#9D174D", "#86198F", "#6B21A8", "#5B21B6", "#3730A3",
+    "#1E40AF", "#075985", "#155E75", "#115E59",
+  ],
+  &[
+    "#020617", "#365314", "#713F12", "#451A03", "#7C2D12", "#4C0519",
+    "#7F1D1D", "#831843", "#701A75", "#581C87", "#4C1D95", "#312E81",
+    "#1E3A8A", "#0C4A6E", "#164E63", "#134E4A",
+  ],
+];
+
+fn color_swatch_from_hex(hex: &str) -> Span<'static> {
+  swatch(config::parse_hex_color(hex).unwrap_or(Color::Black))
+}
+
+fn palette_swatch_from_hex(hex: &str, selected: bool) -> Span<'static> {
+  let color = config::parse_hex_color(hex).unwrap_or(Color::Black);
+  if selected {
+    Span::styled(
+      "[]",
+      Style::default()
+        .fg(palette_marker_color(color))
+        .bg(color)
+        .add_modifier(Modifier::BOLD),
+    )
+  } else {
+    Span::styled("██", Style::default().fg(color))
+  }
+}
+
+fn palette_marker_color(color: Color) -> Color {
+  let Color::Rgb(r, g, b) = color else {
+    return Color::Black;
+  };
+  let luma = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
+  if luma > 0.55 { Color::Black } else { Color::White }
+}
+
+fn selected_palette_view_hex(
+  editor: &crate::app::CustomThemeEditorState,
+) -> &'static str {
+  THEME_PALETTE_VIEW[editor.shade_cursor.min(THEME_PALETTE_VIEW.len() - 1)]
+    [editor.hue_cursor.min(THEME_PALETTE_VIEW[0].len() - 1)]
+}
+
+fn selection_contrast_line(theme: &config::CustomThemeConfig) -> Line<'static> {
+  let text = theme.colors.get_role("text").and_then(hex_luma).unwrap_or(1.0);
+  let selection = theme
+    .colors
+    .get_role("bg_selection")
+    .and_then(hex_luma)
+    .unwrap_or(0.0);
+  let diff = (text - selection).abs();
+  let t = theme.to_theme();
+  if diff < 0.22 {
+    Line::from(Span::styled(
+      "Selection contrast is low; text may blend into the selected row.",
+      Style::default().fg(t.warning),
+    ))
+  } else {
+    Line::from(Span::styled(
+      "Selection contrast looks readable.",
+      Style::default().fg(t.success),
+    ))
+  }
+}
+
+fn hex_luma(hex: &str) -> Option<f32> {
+  let Color::Rgb(r, g, b) = config::parse_hex_color(hex)? else {
+    return None;
+  };
+  Some((0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -3203,55 +3690,50 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
 pub const HELP_SECTION_COUNT: usize = HELP_SECTIONS.len();
 
 fn draw_help_overlay(frame: &mut Frame, app: &mut App) {
-  let t = app.active_theme.theme();
+  let t = app.theme();
   let area = frame.area();
 
-  let (_, bindings) =
+  let (section_name, bindings) =
     HELP_SECTIONS[app.help_section.min(HELP_SECTIONS.len() - 1)];
-  let body_rows = bindings.len() as u16;
-  let desired_h = body_rows.saturating_add(5);
-  let popup_rect = popup_rect(area, 68, desired_h, 64, 12, 72);
+  let popup_rect = settings_modal_rect(area);
 
   frame.render_widget(Clear, popup_rect);
 
-  let block = quiet_popup_block(" Help · q/Esc close ", &t);
+  let block = settings_card_block(" Help ", &t);
   let block_inner = block.inner(popup_rect);
   let inner = popup_inner(block_inner, 1, 0);
   frame.render_widget(block, popup_rect);
 
-  let layout_rows = Layout::vertical([
-    Constraint::Length(1),
-    Constraint::Length(1),
-    Constraint::Min(0),
-    Constraint::Length(1),
-  ])
-  .split(inner);
-  let tab_area = layout_rows[0];
-  let sep_area = layout_rows[1];
-  let body_area = layout_rows[2];
-  let footer_area = layout_rows[3];
-
-  let tab_style_active =
-    Style::default().fg(t.text).add_modifier(Modifier::BOLD);
-  let tab_style_inactive = Style::default().fg(t.text_dim);
-  let mut tab_spans: Vec<Span> = Vec::new();
-  for (i, (name, _)) in HELP_SECTIONS.iter().enumerate() {
-    if i == app.help_section {
-      tab_spans.push(Span::styled(*name, tab_style_active));
-    } else {
-      tab_spans.push(Span::styled(*name, tab_style_inactive));
-    }
-    if i + 1 < HELP_SECTIONS.len() {
-      tab_spans.push(Span::styled("  |  ", Style::default().fg(t.border)));
-    }
+  if inner.width < 44 || inner.height < 14 {
+    frame.render_widget(
+      Paragraph::new(Span::styled(
+        " terminal too small for help ",
+        Style::default().fg(t.text_dim).bg(t.bg_panel),
+      ))
+      .alignment(Alignment::Center),
+      inner,
+    );
+    return;
   }
-  frame.render_widget(Paragraph::new(Line::from(tab_spans)), tab_area);
 
-  let sep = "─".repeat(sep_area.width as usize);
-  frame.render_widget(
-    Paragraph::new(Span::styled(sep, Style::default().fg(t.border))),
-    sep_area,
-  );
+  let body_footer = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Min(0), Constraint::Length(2)])
+    .split(inner);
+  let body = body_footer[0];
+  let footer_area = body_footer[1];
+
+  let columns = if body.width >= 86 {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(25), Constraint::Min(0)])
+      .split(body)
+  } else {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(0), Constraint::Min(0)])
+      .split(body)
+  };
 
   let key_col_w = bindings
     .iter()
@@ -3264,7 +3746,74 @@ fn draw_help_overlay(frame: &mut Frame, app: &mut App) {
   let key_style = Style::default().fg(t.accent);
   let header_style = Style::default().fg(t.header).add_modifier(Modifier::BOLD);
   let desc_style = Style::default().fg(t.text);
-  let gray = Style::default().fg(t.text_dim);
+  let dim_style = Style::default().fg(t.text_dim);
+  let bg_style = Style::default().bg(t.bg_panel);
+
+  if columns[0].width > 0 {
+    let rail = columns[0];
+    let rail_rule = "─".repeat(rail.width.saturating_sub(4) as usize);
+    let mut rail_lines = vec![
+      Line::from(""),
+      Line::from(Span::styled("  Sections", header_style)),
+      Line::from(Span::styled(format!("  {rail_rule}"), dim_style)),
+      Line::from(""),
+    ];
+
+    for (i, (name, bindings)) in HELP_SECTIONS.iter().enumerate() {
+      let selected = i == app.help_section;
+      let marker = if selected { ">" } else { " " };
+      let style = if selected {
+        t.style_selection_text()
+      } else {
+        Style::default().fg(t.text)
+      };
+      let count = bindings.iter().filter(|(_, desc)| !desc.is_empty()).count();
+      let label_width = rail.width.saturating_sub(10) as usize;
+      rail_lines.push(Line::from(vec![
+        Span::styled(format!(" {marker} "), style),
+        Span::styled(
+          format!("{:<label_width$}", truncate(name, label_width)),
+          style,
+        ),
+        Span::styled(format!(" {count:>2}"), dim_style),
+      ]));
+    }
+
+    frame.render_widget(
+      Paragraph::new(rail_lines).wrap(Wrap { trim: false }).style(bg_style),
+      rail,
+    );
+  }
+
+  let content_area = columns[1];
+  let content_rows = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Length(3), Constraint::Min(0)])
+    .split(content_area);
+  let title_area = content_rows[0];
+  let body_area = content_rows[1];
+
+  let title_rule = "─".repeat(title_area.width.saturating_sub(2) as usize);
+  let mut title_lines = vec![
+    Line::from(vec![
+      Span::styled("  ", dim_style),
+      Span::styled(section_name, header_style),
+      Span::styled(
+        format!("  {}/{}", app.help_section + 1, HELP_SECTIONS.len()),
+        dim_style,
+      ),
+    ]),
+    Line::from(Span::styled(format!("  {title_rule}"), dim_style)),
+  ];
+  if columns[0].width == 0 {
+    title_lines.push(Line::from(Span::styled(
+      "  h/l or Tab changes section",
+      dim_style,
+    )));
+  } else {
+    title_lines.push(Line::from(""));
+  }
+  frame.render_widget(Paragraph::new(title_lines).style(bg_style), title_area);
 
   let mut body_lines: Vec<Line> = Vec::new();
   for (key, desc) in bindings.iter() {
@@ -3275,11 +3824,15 @@ fn draw_help_overlay(frame: &mut Frame, app: &mut App) {
     }
     if !key.is_empty() && desc.is_empty() {
       // section subheading (key text, no description)
-      body_lines.push(Line::from(Span::styled(*key, header_style)));
+      body_lines.push(Line::from(vec![
+        Span::styled("  ", dim_style),
+        Span::styled(*key, header_style),
+      ]));
       continue;
     }
     let key_cell = format!("{:<width$}  ", key, width = key_col_w);
     body_lines.push(Line::from(vec![
+      Span::styled("  ", dim_style),
       Span::styled(key_cell, key_style),
       Span::styled(*desc, desc_style),
     ]));
@@ -3290,13 +3843,16 @@ fn draw_help_overlay(frame: &mut Frame, app: &mut App) {
   app.help_scroll = app.help_scroll.min(max_scroll);
   let scroll = app.help_scroll;
 
-  frame
-    .render_widget(Paragraph::new(body_lines).scroll((scroll, 0)), body_area);
   frame.render_widget(
-    Paragraph::new(Line::from(Span::styled(
-      "Tab/h/l section | j/k scroll | q/Esc close",
-      gray,
-    ))),
+    Paragraph::new(body_lines)
+      .scroll((scroll, 0))
+      .style(Style::default().bg(t.bg_panel)),
+    body_area,
+  );
+  draw_card_footer(
+    frame,
     footer_area,
+    &t,
+    "  h/l or Tab section · j/k scroll · q/Esc close",
   );
 }
