@@ -86,6 +86,74 @@ Guidelines:
 For each paper with code: **Title** — GitHub: [link or 'not found'] — [framework, brief note]
 Group by: Official implementations first, then third-party.";
 
+const SYSTEM_COMPARE: &str = "\
+You are a research discovery agent for an AI/ML paper reader called Trench. \
+Find papers representing different approaches and produce a structured comparison.
+
+Guidelines:
+- Search for papers on each side of the comparison.
+- After finding papers, write a comparison using EXACTLY this format:
+
+## Comparison: [topic]
+
+### [Approach A]
+(2-3 sentences: key characteristics, strengths, weaknesses)
+
+### [Approach B]
+(2-3 sentences: key characteristics, strengths, weaknesses)
+
+### Verdict
+(1-2 sentences: when to use which, or which currently leads)";
+
+const SYSTEM_DIGEST: &str = "\
+You are a research discovery agent for an AI/ML paper reader called Trench. \
+Find the most significant AI/ML developments from the past week.
+
+Guidelines:
+- Search for very recent papers across cs.LG, cs.AI, cs.CL.
+- Use search_web if available to find announcements and news.
+- After finding papers, write a digest using EXACTLY this format:
+
+## This Week in AI/ML
+
+### Highlights
+(3-5 bullet points: the most significant papers or announcements)
+
+### Papers to Watch
+(3-5 bullet points: notable papers worth reading this week)";
+
+const SYSTEM_AUTHOR: &str = "\
+You are a research discovery agent for an AI/ML paper reader called Trench. \
+Find all recent papers by the specified author or researcher.
+
+Guidelines:
+- Use search_arxiv with the author's name as the primary query.
+- Try variations of the name if initial results are sparse.
+- After finding papers, write a summary using EXACTLY this format:
+
+## Papers by [Author Name]
+
+(1-sentence context: their research focus or affiliation if known)
+
+List each paper: **Title** (Year) — one sentence summary
+Order by most recent first.";
+
+const SYSTEM_TRENDING: &str = "\
+You are a research discovery agent for an AI/ML paper reader called Trench. \
+Find papers on the given topic that are currently getting significant attention.
+
+Guidelines:
+- Use search_papers_with_code to find papers with active repositories.
+- Prioritise papers from the last 30 days.
+- After finding papers, write a trending summary using EXACTLY this format:
+
+## Trending: [topic]
+
+(1-sentence context: why this topic is getting attention right now)
+
+For each paper: **Title** — why it matters — [GitHub stars or engagement signal if known]
+List at most 10, most significant first.";
+
 fn system_for_intent(intent: QueryIntent) -> &'static str {
   match intent {
     QueryIntent::FindPapers       => SYSTEM_FIND,
@@ -93,6 +161,10 @@ fn system_for_intent(intent: QueryIntent) -> &'static str {
     QueryIntent::SotaLookup       => SYSTEM_SOTA,
     QueryIntent::ReadingList      => SYSTEM_READING_LIST,
     QueryIntent::CodeSearch       => SYSTEM_CODE,
+    QueryIntent::Compare          => SYSTEM_COMPARE,
+    QueryIntent::Digest           => SYSTEM_DIGEST,
+    QueryIntent::AuthorSearch     => SYSTEM_AUTHOR,
+    QueryIntent::Trending         => SYSTEM_TRENDING,
   }
 }
 

@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, CustomThemeConfig};
 use crate::discovery::DiscoveryMessage;
 use crate::ingestion::message::FetchMessage;
 use crate::models::*;
@@ -178,6 +178,25 @@ pub struct NotesTab {
   pub title: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CustomThemeEditorMode {
+  Palette,
+  Name,
+  Hex,
+  DeleteConfirm,
+}
+
+#[derive(Clone)]
+pub struct CustomThemeEditorState {
+  pub theme: CustomThemeConfig,
+  pub is_new: bool,
+  pub mode: CustomThemeEditorMode,
+  pub role_cursor: usize,
+  pub hue_cursor: usize,
+  pub shade_cursor: usize,
+  pub edit_buf: String,
+}
+
 /// Tracks a pane's current screen position and open state.
 #[derive(Clone)]
 pub struct PaneInfo {
@@ -248,6 +267,8 @@ pub struct App {
   pub discovery_force_new: bool,
   /// Classified intent of the current/last discovery query.
   pub discovery_intent: crate::discovery::intent::QueryIntent,
+  /// When set by a slash command, overrides heuristic classification once.
+  pub discovery_forced_intent: Option<crate::discovery::intent::QueryIntent>,
   pub search_query: String,
   pub search_active: bool,
   pub status_message: Option<String>,
@@ -291,6 +312,7 @@ pub struct App {
 
   // Active theme (mirrors config.theme; applied live each frame)
   pub active_theme: ui_theme::ThemeId,
+  pub active_custom_theme_id: Option<String>,
 
   // Settings screen
   pub settings_field: usize,
@@ -302,7 +324,8 @@ pub struct App {
   pub theme_picker_active: bool,
   pub theme_picker_cursor: usize,
   pub theme_picker_scroll: usize,
-  pub theme_picker_original: Option<ui_theme::ThemeId>,
+  pub theme_picker_original: Option<(ui_theme::ThemeId, Option<String>)>,
+  pub custom_theme_editor: Option<CustomThemeEditorState>,
 
   // Sources popup
   pub sources_cursor: usize,
@@ -427,6 +450,7 @@ impl App {
       discovery_session: crate::store::session::load(),
       discovery_force_new: false,
       discovery_intent: crate::discovery::intent::QueryIntent::default(),
+      discovery_forced_intent: None,
       search_query: String::new(),
       search_active: false,
       status_message: None,
@@ -450,6 +474,7 @@ impl App {
       details_last_item_url: None,
       config: Config::default(),
       active_theme: ui_theme::ThemeId::Dark,
+      active_custom_theme_id: None,
       settings_field: 0,
       settings_editing: false,
       settings_edit_buf: String::new(),
@@ -460,6 +485,7 @@ impl App {
       theme_picker_cursor: 0,
       theme_picker_scroll: 0,
       theme_picker_original: None,
+      custom_theme_editor: None,
       sources_cursor: 0,
       sources_input: String::new(),
       sources_input_active: false,
@@ -522,6 +548,38 @@ impl App {
         PaneInfo::new(PaneId::Chat),
         PaneInfo::new(PaneId::SecondaryReader),
       ],
+    }
+  }
+
+  pub fn theme(&self) -> ui_theme::Theme {
+    if let Some(id) = &self.active_custom_theme_id {
+      if let Some(custom) = self.config.custom_themes.iter().find(|t| &t.id == id) {
+        return custom.to_theme();
+      }
+    }
+    self.active_theme.theme()
+  }
+
+  pub fn active_theme_name(&self) -> String {
+    if let Some(id) = &self.active_custom_theme_id {
+      if let Some(custom) = self.config.custom_themes.iter().find(|t| &t.id == id) {
+        return custom.name.clone();
+      }
+    }
+    self.active_theme.info().name.to_string()
+  }
+
+  pub fn active_custom_theme(&self) -> Option<&CustomThemeConfig> {
+    let id = self.active_custom_theme_id.as_ref()?;
+    self.config.custom_themes.iter().find(|t| &t.id == id)
+  }
+
+  pub fn reconcile_custom_theme_selection(&mut self) {
+    if let Some(id) = &self.active_custom_theme_id {
+      if !self.config.custom_themes.iter().any(|t| &t.id == id) {
+        self.active_custom_theme_id = None;
+        self.config.active_custom_theme_id = None;
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 use crate::app::{App, FeedTab};
 use crate::commands::parser::SlashCommandInvocation;
+use crate::discovery::intent::QueryIntent;
 
 pub fn dispatch_slash_command(app: &mut App, cmd: SlashCommandInvocation) {
   match cmd {
@@ -74,19 +75,50 @@ pub fn dispatch_slash_command(app: &mut App, cmd: SlashCommandInvocation) {
         app.push_chat_assistant_message(format!("Added RSS feed: {url}"));
       }
     }
-    SlashCommandInvocation::Trending { .. } => {
-      app.push_chat_assistant_message(
-        "/trending is planned but not implemented yet.".to_string(),
-      );
+    SlashCommandInvocation::Sota { topic } => {
+      dispatch_discovery_with_intent(app, topic, QueryIntent::SotaLookup, "/sota");
+    }
+    SlashCommandInvocation::ReadingList { topic } => {
+      dispatch_discovery_with_intent(app, topic, QueryIntent::ReadingList, "/reading-list");
+    }
+    SlashCommandInvocation::Code { topic } => {
+      dispatch_discovery_with_intent(app, topic, QueryIntent::CodeSearch, "/code");
+    }
+    SlashCommandInvocation::Compare { topic } => {
+      dispatch_discovery_with_intent(app, topic, QueryIntent::Compare, "/compare");
+    }
+    SlashCommandInvocation::Digest => {
+      app.discovery_forced_intent = Some(QueryIntent::Digest);
+      crate::workflows::discover::start(app, "what happened in AI/ML this week".to_string());
+    }
+    SlashCommandInvocation::Author { name } => {
+      dispatch_discovery_with_intent(app, name, QueryIntent::AuthorSearch, "/author");
+    }
+    SlashCommandInvocation::Trending { topic } => {
+      dispatch_discovery_with_intent(app, topic, QueryIntent::Trending, "/trending");
     }
     SlashCommandInvocation::Watch { .. } => {
       app.push_chat_assistant_message(
-        "/watch is planned but not implemented yet.".to_string(),
+        "/watch is coming soon. It will monitor a topic over time and surface new results on each launch.".to_string(),
       );
     }
     SlashCommandInvocation::Unknown { raw } => {
       app.push_chat_assistant_message(format!("Unknown slash command: {raw}"));
     }
+  }
+}
+
+fn dispatch_discovery_with_intent(
+  app: &mut App,
+  topic: String,
+  intent: QueryIntent,
+  command: &str,
+) {
+  if topic.is_empty() {
+    app.push_chat_assistant_message(format!("Usage: {command} TOPIC"));
+  } else {
+    app.discovery_forced_intent = Some(intent);
+    crate::workflows::discover::start(app, topic);
   }
 }
 

@@ -7,6 +7,12 @@ pub enum SlashCommandInvocation {
   ClearDiscoveries,
   AddArxivCategory { category: String },
   AddFeed { url: String },
+  Sota { topic: String },
+  ReadingList { topic: String },
+  Code { topic: String },
+  Compare { topic: String },
+  Digest,
+  Author { name: String },
   Trending { topic: String },
   Watch { topic: String },
   Unknown { raw: String },
@@ -30,6 +36,22 @@ pub fn parse_slash_command(raw: &str) -> SlashCommandInvocation {
     }
     Some(CommandId::AddFeed) => SlashCommandInvocation::AddFeed {
       url: trimmed.strip_prefix("/add-feed").unwrap_or("").trim().to_string(),
+    },
+    Some(CommandId::Sota) => SlashCommandInvocation::Sota {
+      topic: trimmed.strip_prefix("/sota").unwrap_or("").trim().to_string(),
+    },
+    Some(CommandId::ReadingList) => SlashCommandInvocation::ReadingList {
+      topic: trimmed.strip_prefix("/reading-list").unwrap_or("").trim().to_string(),
+    },
+    Some(CommandId::Code) => SlashCommandInvocation::Code {
+      topic: trimmed.strip_prefix("/code").unwrap_or("").trim().to_string(),
+    },
+    Some(CommandId::Compare) => SlashCommandInvocation::Compare {
+      topic: trimmed.strip_prefix("/compare").unwrap_or("").trim().to_string(),
+    },
+    Some(CommandId::Digest) => SlashCommandInvocation::Digest,
+    Some(CommandId::Author) => SlashCommandInvocation::Author {
+      name: trimmed.strip_prefix("/author").unwrap_or("").trim().to_string(),
     },
     Some(CommandId::Trending) => SlashCommandInvocation::Trending {
       topic: trimmed.strip_prefix("/trending").unwrap_or("").trim().to_string(),

@@ -490,7 +490,9 @@ pub(crate) fn spawn_ai_discovery(
 
   app.discovery_force_new = false;
 
-  let intent = if is_refinement {
+  let intent = if let Some(forced) = app.discovery_forced_intent.take() {
+    forced
+  } else if is_refinement {
     app.discovery_session.query_intent
   } else {
     discovery::intent::classify(&topic)
@@ -821,7 +823,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let cfg = config::Config::load();
   app.github_token = cfg.github_token.clone();
   app.active_theme = cfg.theme;
+  app.active_custom_theme_id = cfg.active_custom_theme_id.clone();
   app.config = cfg;
+  app.reconcile_custom_theme_selection();
 
   // Load persisted workflow states and UI state.
   app.persisted_states = store::load();

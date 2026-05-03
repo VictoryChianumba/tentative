@@ -7,6 +7,10 @@ pub enum QueryIntent {
   SotaLookup,
   ReadingList,
   CodeSearch,
+  Compare,
+  Digest,
+  AuthorSearch,
+  Trending,
 }
 
 impl QueryIntent {
@@ -17,6 +21,10 @@ impl QueryIntent {
       Self::SotaLookup       => "sota",
       Self::ReadingList      => "reading list",
       Self::CodeSearch       => "code",
+      Self::Compare          => "compare",
+      Self::Digest           => "digest",
+      Self::AuthorSearch     => "author",
+      Self::Trending         => "trending",
     }
   }
 }
@@ -54,6 +62,34 @@ pub fn classify(topic: &str) -> QueryIntent {
     || t.contains("how to implement")
   {
     return QueryIntent::CodeSearch;
+  }
+
+  if t.contains(" vs ") || t.contains(" versus ")
+    || t.contains("compare ") || t.contains("comparison of")
+    || t.contains("difference between") || t.contains("vs.")
+  {
+    return QueryIntent::Compare;
+  }
+
+  if t.contains("this week") || t.contains("weekly digest")
+    || t.contains("latest news") || t.contains("recent developments")
+    || t.contains("what happened") || t.contains("digest")
+  {
+    return QueryIntent::Digest;
+  }
+
+  if t.contains("papers by ") || t.contains("work by ")
+    || t.contains("research by ") || t.contains("'s papers")
+    || t.contains("'s research") || t.contains("authored by")
+  {
+    return QueryIntent::AuthorSearch;
+  }
+
+  if t.contains("trending") || t.contains("popular")
+    || t.contains("most cited") || t.contains("what's hot")
+    || t.contains("getting attention") || t.contains("viral")
+  {
+    return QueryIntent::Trending;
   }
 
   QueryIntent::FindPapers
