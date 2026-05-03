@@ -721,7 +721,7 @@ fn draw_feed_pane(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Discoveries tab: paper list above, persistent search bar below.
 fn draw_discoveries_with_searchbar(frame: &mut Frame, app: &mut App, area: Rect) {
-  const FOOTER_H: u16 = 4; // separator + status + input + hint
+  const FOOTER_H: u16 = 3; // separator + input + hint
   if area.height <= FOOTER_H {
     draw_discovery_searchbar(frame, app, area);
     return;
@@ -753,43 +753,55 @@ fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
   let has_session = !app.discovery_session.is_empty();
   let intent_label = app.discovery_intent.label();
 
-  let session_badge = if has_session { " [session]" } else { "" };
+  // Separator line — title shows current status inline rather than a separate row.
   let intent_badge = if intent_label != "papers" {
-    format!(" [{intent_label}]")
+    format!(" [{}]", intent_label)
   } else {
     String::new()
   };
-  let badge = format!("{session_badge}{intent_badge}");
-  let sep_width = w.saturating_sub(14 + badge.len());
-  let sep = "─".repeat(sep_width);
-  let sep_line = Line::from(Span::styled(
-    format!("─── Discovery{badge} {sep}"),
-    Style::default().fg(t.border),
-  ));
-
-  let status = if app.discovery_loading {
-    app.discovery_status.as_str()
-  } else if !app.discovery_status.is_empty() {
-    app.discovery_status.as_str()
+  let (title_text, title_style) = if app.discovery_loading {
+    let short = app.discovery_status.trim_end_matches('…').trim_end_matches("...");
+    (
+      format!("{}…{}", short, intent_badge),
+      Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    )
   } else if has_session {
-    "Session active — Ctrl+N for a new search"
+    (
+      format!("Discovery ●{}", intent_badge),
+      Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+    )
   } else {
-    "Type to search — any key focuses this bar"
+    (
+      format!("Discovery{}", intent_badge),
+      Style::default().fg(t.border),
+    )
   };
-  let status_line = Line::from(Span::styled(
-    truncate(status, w),
-    Style::default().fg(t.text_dim),
-  ));
-
-  let cursor = if app.discovery_search_focused { "█" } else { " " };
-  let input_line = Line::from(vec![
-    Span::styled("> ", Style::default().fg(t.accent)),
-    Span::styled(
-      format!("{}{}", app.discovery_query, cursor),
-      Style::default().fg(t.text),
-    ),
+  let sep_fill = "─".repeat(w.saturating_sub(title_text.len() + 8));
+  let sep_line = Line::from(vec![
+    Span::styled("─── ", Style::default().fg(t.border)),
+    Span::styled(title_text, title_style),
+    Span::styled(format!(" {sep_fill}"), Style::default().fg(t.border)),
   ]);
 
+  // Input line — prompt only when focused, query dim when unfocused.
+  let cursor = if app.discovery_search_focused { "█" } else { "" };
+  let (prompt, query_style) = if app.discovery_search_focused {
+    (
+      Span::styled("  ", Style::default().fg(t.accent)),
+      Style::default().fg(t.text),
+    )
+  } else {
+    (
+      Span::styled("  ", Style::default().fg(t.text_dim)),
+      Style::default().fg(t.text_dim),
+    )
+  };
+  let input_line = Line::from(vec![
+    prompt,
+    Span::styled(format!("{}{}", app.discovery_query, cursor), query_style),
+  ]);
+
+  // Hint line — contextual, always rendered to avoid height jitter.
   let hint_text = if app.discovery_search_focused {
     if app.discovery_query.starts_with('/') {
       "Tab: complete  ↑↓: navigate  Enter: run  Esc: cancel"
@@ -799,17 +811,13 @@ fn draw_discovery_searchbar(frame: &mut Frame, app: &App, area: Rect) {
       "Enter: search  /: commands  Esc: unfocus"
     }
   } else if has_session {
-    "Any key to refine  ·  Ctrl+N: new search"
+    "Any key to refine  ·  Ctrl+N: new search  ·  / for commands"
   } else {
     "Any key to focus  ·  / for commands"
   };
-  let hint_line = Line::from(Span::styled(
-    hint_text,
-    Style::default().fg(t.text_dim),
-  ));
+  let hint_line = Line::from(Span::styled(hint_text, Style::default().fg(t.text_dim)));
 
-  let para = Paragraph::new(vec![sep_line, status_line, input_line, hint_line]);
-  frame.render_widget(para, area);
+  frame.render_widget(Paragraph::new(vec![sep_line, input_line, hint_line]), area);
 }
 
 fn draw_discovery_palette(frame: &mut Frame, app: &App, list_area: Rect) {
@@ -2161,7 +2169,7 @@ fn footer_command_line(app: &App) -> Line<'static> {
     ordinary,
   ));
   spans.push(Span::styled(
-    format!("ctrl+t leader | tab {tab_target} | ? help"),
+    format!("q quit | ctrl+t leader | tab {tab_target} | ? help"),
     ordinary,
   ));
 
@@ -2430,26 +2438,42 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
 
   frame.render_widget(Clear, popup_area);
 
-  let block = Block::default()
-    .borders(Borders::ALL)
-    .title(Span::styled(
-      " Manage Sources ",
-      Style::default().fg(t.text).add_modifier(Modifier::BOLD),
-    ))
-    .border_style(Style::default().fg(t.border))
-    .style(Style::default().bg(t.bg_panel));
-
+  let block = settings_card_block(" Manage Sources ", &t);
   let inner = block.inner(popup_area);
   frame.render_widget(block, popup_area);
+
+  if inner.width < 44 || inner.height < 14 {
+    frame.render_widget(
+      Paragraph::new(Span::styled(
+        " terminal too small for sources ",
+        Style::default().fg(t.text_dim).bg(t.bg_panel),
+      ))
+      .alignment(Alignment::Center),
+      inner,
+    );
+    return;
+  }
 
   let chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints([Constraint::Min(0), Constraint::Length(2)])
     .split(inner);
-  let content_area = chunks[0];
+  let body_area = chunks[0];
   let footer_area = chunks[1];
 
-  let w = content_area.width as usize;
+  let columns = if body_area.width >= 96 {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(29), Constraint::Min(0)])
+      .split(body_area)
+  } else {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(0), Constraint::Min(0)])
+      .split(body_area)
+  };
+  let list_area = columns[1];
+  let w = list_area.width as usize;
   let hrule = "─".repeat(w.saturating_sub(4));
   let cats = app.sources_popup_arxiv_cats();
   let cats_count = cats.len();
@@ -2457,15 +2481,61 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
   let custom_feeds = &app.config.sources.custom_feeds;
   let cursor = app.sources_cursor;
 
-  let gray = Style::default().fg(t.text_dim);
-  let white = Style::default().fg(t.text);
-  let bold_white = Style::default().fg(t.header).add_modifier(Modifier::BOLD);
-  let cyan = Style::default().fg(t.accent);
+  let dim_style = Style::default().fg(t.text_dim);
+  let text_style = Style::default().fg(t.text);
+  let header_style = Style::default().fg(t.header).add_modifier(Modifier::BOLD);
+  let accent_style = Style::default().fg(t.accent);
+  let bg_style = Style::default().bg(t.bg_panel);
   let selected_style = t.style_selection_text();
+
+  if columns[0].width > 0 {
+    let enabled_predefined = crate::config::PREDEFINED_SOURCES
+      .iter()
+      .filter(|name| {
+        app.config.sources.enabled_sources.get(**name).copied().unwrap_or(true)
+      })
+      .count();
+    let rail = columns[0];
+    let rail_rule = "─".repeat(rail.width.saturating_sub(4) as usize);
+    let rail_lines = vec![
+      Line::from(""),
+      Line::from(Span::styled("  Source Set", header_style)),
+      Line::from(Span::styled(format!("  {rail_rule}"), dim_style)),
+      Line::from(""),
+      Line::from(vec![
+        Span::styled("  arXiv categories ", dim_style),
+        Span::styled(
+          app.config.sources.arxiv_categories.len().to_string(),
+          text_style,
+        ),
+      ]),
+      Line::from(vec![
+        Span::styled("  Built-ins        ", dim_style),
+        Span::styled(format!("{enabled_predefined}/{sources_count}"), text_style),
+      ]),
+      Line::from(vec![
+        Span::styled("  Custom feeds     ", dim_style),
+        Span::styled(custom_feeds.len().to_string(), text_style),
+      ]),
+      Line::from(""),
+      Line::from(Span::styled("  Add by URL", header_style)),
+      Line::from(Span::styled(format!("  {rail_rule}"), dim_style)),
+      Line::from(Span::styled(
+        "  Paste RSS, Atom, arXiv category, or supported source URL.",
+        dim_style,
+      )),
+    ];
+
+    frame.render_widget(
+      Paragraph::new(rail_lines).wrap(Wrap { trim: false }).style(bg_style),
+      rail,
+    );
+  }
 
   let mut lines: Vec<Line> = Vec::new();
 
-  lines.push(Line::from(Span::styled("  Add source", bold_white)));
+  lines.push(Line::from(""));
+  lines.push(Line::from(Span::styled("  Add source", header_style)));
 
   let input_active = app.sources_input_active;
   let input_focused = cursor == 0;
@@ -2482,17 +2552,17 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
       if input_active {
         Style::default().fg(t.success)
       } else if input_focused {
-        Style::default().fg(t.accent)
+        accent_style
       } else {
-        gray
+        dim_style
       },
     ),
     Span::styled(
       truncate(&input_display, w.saturating_sub(8)),
       if input_active || input_focused {
-        Style::default().fg(t.text)
+        text_style
       } else {
-        gray
+        dim_style
       },
     ),
   ]));
@@ -2500,7 +2570,7 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
   let detect_line = match &app.sources_detect_state {
     SourcesDetectState::Idle => {
       if input_focused && !app.sources_input.is_empty() && !input_active {
-        Line::from(Span::styled("  Press Enter to detect feed type", gray))
+        Line::from(Span::styled("  Press Enter to detect feed type", dim_style))
       } else {
         Line::from("")
       }
@@ -2515,7 +2585,7 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
       )),
       DiscoverResult::HuggingFaceAlreadyEnabled => Line::from(Span::styled(
         "  Detected: HuggingFace daily papers — already enabled",
-        gray,
+        dim_style,
       )),
       DiscoverResult::RssFeed { url, .. } => {
         let display = truncate(url, w.saturating_sub(36));
@@ -2532,8 +2602,8 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
   };
   lines.push(detect_line);
 
-  lines.push(Line::from(Span::styled("  arXiv categories", bold_white)));
-  lines.push(Line::from(Span::styled(format!("  {hrule}"), gray)));
+  lines.push(Line::from(Span::styled("  arXiv categories", header_style)));
+  lines.push(Line::from(Span::styled(format!("  {hrule}"), dim_style)));
   for (i, (code, label)) in cats.iter().enumerate() {
     let pos = 1 + i;
     let sel = cursor == pos;
@@ -2545,16 +2615,16 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
     let style = if sel {
       selected_style
     } else if enabled {
-      cyan
+      accent_style
     } else {
-      gray
+      dim_style
     };
     lines.push(Line::from(Span::styled(text, style)));
   }
   lines.push(Line::from(""));
 
-  lines.push(Line::from(Span::styled("  Sources", bold_white)));
-  lines.push(Line::from(Span::styled(format!("  {hrule}"), gray)));
+  lines.push(Line::from(Span::styled("  Sources", header_style)));
+  lines.push(Line::from(Span::styled(format!("  {hrule}"), dim_style)));
   for (i, &name) in crate::config::PREDEFINED_SOURCES.iter().enumerate() {
     let pos = 1 + cats_count + i;
     let sel = cursor == pos;
@@ -2565,41 +2635,58 @@ fn draw_sources_popup(frame: &mut Frame, app: &App) {
     let style = if sel {
       selected_style
     } else if enabled {
-      cyan
+      accent_style
     } else {
-      gray
+      dim_style
     };
     lines.push(Line::from(Span::styled(text, style)));
   }
   lines.push(Line::from(""));
 
-  lines.push(Line::from(Span::styled("  Custom feeds", bold_white)));
-  lines.push(Line::from(Span::styled(format!("  {hrule}"), gray)));
+  lines.push(Line::from(Span::styled("  Custom feeds", header_style)));
+  lines.push(Line::from(Span::styled(format!("  {hrule}"), dim_style)));
   if custom_feeds.is_empty() {
-    lines.push(Line::from(Span::styled("  none", gray)));
+    lines.push(Line::from(Span::styled("  none", dim_style)));
   } else {
     for (i, feed) in custom_feeds.iter().enumerate() {
       let pos = 1 + cats_count + sources_count + i;
       let sel = cursor == pos;
       let text = format!("  [x] {}", feed.name);
-      let style = if sel { selected_style } else { cyan };
+      let style = if sel { selected_style } else { accent_style };
       lines.push(Line::from(Span::styled(text, style)));
     }
   }
 
-  let para = Paragraph::new(lines).style(Style::default().bg(t.bg_panel));
-  frame.render_widget(para, content_area);
+  let selected_line = if cursor == 0 {
+    2
+  } else if cursor <= cats_count {
+    6 + cursor.saturating_sub(1)
+  } else if cursor <= cats_count + sources_count {
+    9 + cats_count + cursor.saturating_sub(1 + cats_count)
+  } else {
+    12
+      + cats_count
+      + sources_count
+      + cursor.saturating_sub(1 + cats_count + sources_count)
+  };
+  let viewport_rows = list_area.height as usize;
+  let scroll = if selected_line >= viewport_rows.saturating_sub(2) {
+    selected_line.saturating_sub(viewport_rows.saturating_sub(3))
+  } else {
+    0
+  };
 
-  let footer_rule = "─".repeat(footer_area.width as usize);
-  let footer = Paragraph::new(vec![
-    Line::from(Span::styled(footer_rule, Style::default().fg(t.border))),
-    Line::from(Span::styled(
-      "  j/k navigate · space toggle · enter add source · d delete · esc back",
-      white,
-    )),
-  ])
-  .style(Style::default().bg(t.bg_panel));
-  frame.render_widget(footer, footer_area);
+  let para = Paragraph::new(lines)
+    .scroll((scroll as u16, 0))
+    .style(bg_style);
+  frame.render_widget(para, list_area);
+
+  draw_card_footer(
+    frame,
+    footer_area,
+    &t,
+    "  j/k navigate · space toggle · enter add source · d delete · esc back",
+  );
 }
 
 // ── Settings view ──────────────────────────────────────────────────────────
@@ -2862,27 +2949,140 @@ fn draw_theme_picker(frame: &mut Frame, app: &App) {
   let popup = settings_modal_rect(area);
 
   frame.render_widget(Clear, popup);
-  let block = Block::default()
-    .borders(Borders::ALL)
-    .title(Span::styled(
-      " Theme ",
-      Style::default().fg(t.text).add_modifier(Modifier::BOLD),
-    ))
-    .border_style(Style::default().fg(t.border))
-    .style(Style::default().bg(t.bg_popup));
+  let block = settings_card_block(" Theme ", &t);
   let inner = block.inner(popup);
   frame.render_widget(block, popup);
 
-  if inner.height == 0 || inner.width == 0 {
+  if inner.width < 44 || inner.height < 14 {
+    frame.render_widget(
+      Paragraph::new(Span::styled(
+        " terminal too small for theme picker ",
+        Style::default().fg(t.text_dim).bg(t.bg_panel),
+      ))
+      .alignment(Alignment::Center),
+      inner,
+    );
     return;
   }
 
-  let footer_h = 1u16.min(inner.height);
-  let list_h = inner.height.saturating_sub(footer_h);
-  let list_area = Rect { height: list_h, ..inner };
-  let footer_area = Rect { y: inner.y + list_h, height: footer_h, ..inner };
+  let body_footer = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Min(0), Constraint::Length(2)])
+    .split(inner);
+  let body = body_footer[0];
+  let footer_area = body_footer[1];
+
+  let columns = if body.width >= 96 {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(29), Constraint::Min(0)])
+      .split(body)
+  } else {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(0), Constraint::Min(0)])
+      .split(body)
+  };
+  let picker_area = columns[1];
+  let picker_rows = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Length(3), Constraint::Min(0)])
+    .split(picker_area);
+  let header_area = picker_rows[0];
+  let list_area = picker_rows[1];
+  let list_h = list_area.height;
 
   let all = ui_theme::ThemeId::all();
+  let active_name = app.active_theme_name();
+
+  if columns[0].width > 0 {
+    let rail = columns[0];
+    let rail_rule = "─".repeat(rail.width.saturating_sub(4) as usize);
+    let custom_count = app.config.custom_themes.len();
+    let rail_lines = vec![
+      Line::from(""),
+      Line::from(Span::styled(
+        "  Appearance",
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+      )),
+      Line::from(Span::styled(
+        format!("  {rail_rule}"),
+        Style::default().fg(t.text_dim),
+      )),
+      Line::from(""),
+      Line::from(vec![
+        Span::styled("  Active theme  ", Style::default().fg(t.text_dim)),
+        Span::styled(
+          truncate(&active_name, rail.width.saturating_sub(18) as usize),
+          Style::default().fg(t.text),
+        ),
+      ]),
+      Line::from(vec![
+        Span::styled("  Presets       ", Style::default().fg(t.text_dim)),
+        Span::styled(all.len().to_string(), Style::default().fg(t.text)),
+      ]),
+      Line::from(vec![
+        Span::styled("  Custom        ", Style::default().fg(t.text_dim)),
+        Span::styled(custom_count.to_string(), Style::default().fg(t.text)),
+      ]),
+      Line::from(""),
+      Line::from(Span::styled(
+        "  Swatches",
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+      )),
+      Line::from(Span::styled(
+        format!("  {rail_rule}"),
+        Style::default().fg(t.text_dim),
+      )),
+      Line::from(vec![
+        Span::styled("  accent ", Style::default().fg(t.text_dim)),
+        swatch(t.accent),
+        Span::styled(" header ", Style::default().fg(t.text_dim)),
+        swatch(t.header),
+      ]),
+      Line::from(vec![
+        Span::styled("  select ", Style::default().fg(t.text_dim)),
+        swatch(t.bg_selection),
+        Span::styled(" ok ", Style::default().fg(t.text_dim)),
+        swatch(t.success),
+      ]),
+    ];
+
+    frame.render_widget(
+      Paragraph::new(rail_lines)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(t.bg_panel)),
+      rail,
+    );
+  }
+
+  let title_rule = "─".repeat(header_area.width.saturating_sub(2) as usize);
+  let header_lines = vec![
+    Line::from(vec![
+      Span::styled("  ", Style::default().fg(t.text_dim)),
+      Span::styled(
+        "Theme Library",
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+      ),
+      Span::styled(
+        format!(
+          "  {}",
+          truncate(&active_name, header_area.width.saturating_sub(20) as usize)
+        ),
+        Style::default().fg(t.text_dim),
+      ),
+    ]),
+    Line::from(Span::styled(
+      format!("  {title_rule}"),
+      Style::default().fg(t.text_dim),
+    )),
+    Line::from(""),
+  ];
+  frame.render_widget(
+    Paragraph::new(header_lines).style(Style::default().bg(t.bg_panel)),
+    header_area,
+  );
+
   let mut rows: Vec<(Option<usize>, Line)> = Vec::new();
   let mut last_group: Option<ui_theme::ThemeGroup> = None;
 
@@ -2981,16 +3181,15 @@ fn draw_theme_picker(frame: &mut Frame, app: &App) {
     rows.into_iter().skip(start).take(list_h as usize).map(|(_, line)| line).collect();
 
   frame.render_widget(
-    Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
+    Paragraph::new(lines).style(Style::default().bg(t.bg_panel)),
     list_area,
   );
 
-  frame.render_widget(
-    Paragraph::new(Span::styled(
-      " j/k: preview  enter: select/new  e: edit  d: delete  esc: cancel",
-      Style::default().fg(t.text_dim).bg(t.bg_popup),
-    )),
+  draw_card_footer(
+    frame,
     footer_area,
+    &t,
+    "  j/k preview · enter select/new · e edit · d delete · esc cancel",
   );
 
   if app.custom_theme_editor.is_some() {
@@ -3053,51 +3252,71 @@ fn draw_custom_theme_editor(frame: &mut Frame, app: &App) {
   let popup = settings_modal_rect(area);
 
   frame.render_widget(Clear, popup);
-  let title = if editor.is_new { " New Custom Theme " } else { " Edit Custom Theme " };
-  let block = Block::default()
-    .borders(Borders::ALL)
-    .title(Span::styled(
-      title,
-      Style::default().fg(t.text).add_modifier(Modifier::BOLD),
-    ))
-    .border_style(Style::default().fg(t.border_active))
-    .style(Style::default().bg(t.bg_popup));
+  let title =
+    if editor.is_new { " New Custom Theme " } else { " Edit Custom Theme " };
+  let block = settings_card_block(title, &t);
   let inner = block.inner(popup);
   frame.render_widget(block, popup);
 
-  if inner.width < 20 || inner.height < 8 {
+  if inner.width < 44 || inner.height < 14 {
+    frame.render_widget(
+      Paragraph::new(Span::styled(
+        " terminal too small for custom theme editor ",
+        Style::default().fg(t.text_dim).bg(t.bg_panel),
+      ))
+      .alignment(Alignment::Center),
+      inner,
+    );
     return;
   }
 
-  let footer_h = 2.min(inner.height);
-  let body_h = inner.height.saturating_sub(footer_h);
-  let body = Rect { height: body_h, ..inner };
-  let footer = Rect { y: inner.y + body_h, height: footer_h, ..inner };
+  let rows = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Min(0), Constraint::Length(2)])
+    .split(inner);
+  let body = rows[0];
+  let footer = rows[1];
 
   if editor.mode == crate::app::CustomThemeEditorMode::DeleteConfirm {
     let lines = vec![
       Line::from(""),
       Line::from(vec![
         Span::styled("  Delete ", Style::default().fg(t.warning)),
-        Span::styled(editor.theme.name.clone(), Style::default().fg(t.text).add_modifier(Modifier::BOLD)),
+        Span::styled(
+          editor.theme.name.clone(),
+          Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("?", Style::default().fg(t.warning)),
       ]),
       Line::from(""),
-      Line::from(Span::styled("  y: delete  n / esc: cancel", Style::default().fg(t.text_dim))),
+      Line::from(Span::styled(
+        "  y: delete  n / esc: cancel",
+        Style::default().fg(t.text_dim),
+      )),
     ];
     frame.render_widget(
-      Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
+      Paragraph::new(lines).style(Style::default().bg(t.bg_panel)),
       body,
     );
+    draw_card_footer(frame, footer, &t, "  y delete · n/Esc cancel");
     return;
   }
 
-  let cols = Layout::default()
-    .direction(Direction::Horizontal)
-    .constraints([Constraint::Length(36), Constraint::Min(34)])
-    .split(body);
+  let cols = if body.width >= 86 {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(36), Constraint::Min(34)])
+      .split(body)
+  } else {
+    Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Length(0), Constraint::Min(0)])
+      .split(body)
+  };
 
-  draw_custom_theme_roles(frame, cols[0], app);
+  if cols[0].width > 0 {
+    draw_custom_theme_roles(frame, cols[0], app);
+  }
   draw_custom_theme_palette(frame, cols[1], app);
 
   let footer_text = match editor.mode {
@@ -3108,16 +3327,10 @@ fn draw_custom_theme_editor(frame: &mut Frame, app: &App) {
       " enter: apply hex  esc: cancel"
     }
     _ => {
-      " space: apply color  h/l: hue  [/]: shade  x: hex  n: rename  r: reset  s/enter: save"
+      "  space apply · h/l hue · [/ ] shade · x hex · n rename · r reset · s/enter save"
     }
   };
-  frame.render_widget(
-    Paragraph::new(Span::styled(
-      footer_text,
-      Style::default().fg(t.text_dim).bg(t.bg_popup),
-    )),
-    footer,
-  );
+  draw_card_footer(frame, footer, &t, footer_text);
 }
 
 fn draw_custom_theme_roles(frame: &mut Frame, area: Rect, app: &App) {
@@ -3128,11 +3341,17 @@ fn draw_custom_theme_roles(frame: &mut Frame, area: Rect, app: &App) {
   let mut lines = vec![
     Line::from(vec![
       Span::styled("  Name  ", Style::default().fg(t.text_dim)),
-      Span::styled(editor.theme.name.clone(), Style::default().fg(t.text).add_modifier(Modifier::BOLD)),
+      Span::styled(
+        editor.theme.name.clone(),
+        Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+      ),
     ]),
     Line::from(vec![
       Span::styled("  Base  ", Style::default().fg(t.text_dim)),
-      Span::styled(editor.theme.base.info().name, Style::default().fg(t.text_dim)),
+      Span::styled(
+        editor.theme.base.info().name,
+        Style::default().fg(t.text_dim),
+      ),
     ]),
     Line::from(""),
   ];
@@ -3155,7 +3374,7 @@ fn draw_custom_theme_roles(frame: &mut Frame, area: Rect, app: &App) {
   }
 
   frame.render_widget(
-    Paragraph::new(lines).style(Style::default().bg(t.bg_popup)),
+    Paragraph::new(lines).style(Style::default().bg(t.bg_panel)),
     area,
   );
 }
@@ -3165,33 +3384,49 @@ fn draw_custom_theme_palette(frame: &mut Frame, area: Rect, app: &App) {
     return;
   };
   let t = editor.theme.to_theme();
-  let role = CUSTOM_THEME_ROLES[editor.role_cursor.min(CUSTOM_THEME_ROLES.len() - 1)];
+  let role =
+    CUSTOM_THEME_ROLES[editor.role_cursor.min(CUSTOM_THEME_ROLES.len() - 1)];
   let current = editor.theme.colors.get_role(role.key).unwrap_or("#000000");
   let mut lines = Vec::new();
 
   match editor.mode {
     crate::app::CustomThemeEditorMode::Name => {
-      lines.push(Line::from(Span::styled("Rename theme", Style::default().fg(t.header).add_modifier(Modifier::BOLD))));
+      lines.push(Line::from(Span::styled(
+        "Rename theme",
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+      )));
       lines.push(Line::from(""));
       lines.push(Line::from(vec![
         Span::styled("  ", Style::default().bg(t.bg_input)),
-        Span::styled(editor.edit_buf.clone(), Style::default().fg(t.text).bg(t.bg_input)),
+        Span::styled(
+          editor.edit_buf.clone(),
+          Style::default().fg(t.text).bg(t.bg_input),
+        ),
         Span::styled(" ", Style::default().fg(t.cursor_fg).bg(t.cursor_bg)),
       ]));
     }
     crate::app::CustomThemeEditorMode::Hex => {
-      lines.push(Line::from(Span::styled(format!("Hex for {}", role.label), Style::default().fg(t.header).add_modifier(Modifier::BOLD))));
+      lines.push(Line::from(Span::styled(
+        format!("Hex for {}", role.label),
+        Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+      )));
       lines.push(Line::from(""));
       lines.push(Line::from(vec![
         Span::styled("  ", Style::default().bg(t.bg_input)),
-        Span::styled(editor.edit_buf.clone(), Style::default().fg(t.text).bg(t.bg_input)),
+        Span::styled(
+          editor.edit_buf.clone(),
+          Style::default().fg(t.text).bg(t.bg_input),
+        ),
         Span::styled(" ", Style::default().fg(t.cursor_fg).bg(t.cursor_bg)),
       ]));
     }
     _ => {
       lines.push(Line::from(vec![
         Span::styled("Editing ", Style::default().fg(t.text_dim)),
-        Span::styled(role.label, Style::default().fg(t.header).add_modifier(Modifier::BOLD)),
+        Span::styled(
+          role.label,
+          Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  current ", Style::default().fg(t.text_dim)),
         color_swatch_from_hex(current),
         Span::styled(format!(" {current}"), Style::default().fg(t.text_dim)),
@@ -3207,7 +3442,8 @@ fn draw_custom_theme_palette(frame: &mut Frame, area: Rect, app: &App) {
         let mut spans = Vec::new();
         spans.push(Span::styled("  ", Style::default().fg(t.text_dim)));
         for (hue_idx, hex) in row.iter().enumerate() {
-          let selected = shade_idx == editor.shade_cursor && hue_idx == editor.hue_cursor;
+          let selected =
+            shade_idx == editor.shade_cursor && hue_idx == editor.hue_cursor;
           spans.push(palette_swatch_from_hex(hex, selected));
         }
         lines.push(Line::from(spans));
@@ -3217,7 +3453,10 @@ fn draw_custom_theme_palette(frame: &mut Frame, area: Rect, app: &App) {
       lines.push(Line::from(""));
       lines.push(Line::from(vec![
         Span::styled("Preview  ", Style::default().fg(t.text_dim)),
-        Span::styled("Header", Style::default().fg(t.header).add_modifier(Modifier::BOLD)),
+        Span::styled(
+          "Header",
+          Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  normal text  ", Style::default().fg(t.text)),
         Span::styled("dim text  ", Style::default().fg(t.text_dim)),
         Span::styled(" selected row ", t.style_selection_text()),
@@ -3232,7 +3471,9 @@ fn draw_custom_theme_palette(frame: &mut Frame, area: Rect, app: &App) {
   }
 
   frame.render_widget(
-    Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(t.bg_popup)),
+    Paragraph::new(lines)
+      .wrap(Wrap { trim: false })
+      .style(Style::default().bg(t.bg_panel)),
     area,
   );
 }
@@ -3559,7 +3800,10 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
       ("Tab", "Switch Inbox / Discoveries"),
       ("f", "Focus filter panel"),
       ("Enter", "Open paper in reader"),
-      ("Esc", "Quit (from feed) / go back"),
+      ("Space", "Show abstract/details"),
+      ("?", "Open help"),
+      ("q", "Quit from feed"),
+      ("Esc", "Clear/back/cancel"),
       ("click", "Focus interactive pane"),
     ],
   ),
@@ -3567,16 +3811,15 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
     "Leader",
     &[
       ("Ldr = Ctrl+T", ""),
-      ("Ldr+?", "This help screen"),
+      ("? / Ldr+?", "This help screen"),
       ("Ldr+q", "Quit application"),
       ("Ldr+Enter", "Open paper in floating popup"),
       ("Ldr+v", "Cycle reader layout (full→split→dual)"),
       ("Ldr+Esc", "Step back reader state"),
-      ("Ldr+s", "Open sources manager"),
+      ("Ldr+s", "Open settings"),
       ("Ldr+n", "Toggle notes panel"),
       ("Ldr+c", "Toggle chat panel"),
       ("Ldr+z", "Move chat top / bottom"),
-      ("Ldr+S", "Open settings"),
       ("Ldr+h / Ldr+l", "Focus interactive pane left / right"),
       ("Ldr+j / Ldr+k", "Focus interactive pane down / up"),
       ("Ldr+1 / 2 / 3", "Focus interactive pane by number"),
@@ -3592,6 +3835,7 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
     &[
       ("/", "Search"),
       ("Esc", "Clear search"),
+      ("q", "Quit application"),
       ("R", "Refresh all sources"),
       ("o", "Open URL in browser"),
       ("v", "Open repo viewer"),
@@ -3604,6 +3848,7 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
       ("Filter panel", ""),
       ("Space", "Toggle filter at cursor"),
       ("c", "Clear all filters"),
+      ("Esc", "Clear filters and return"),
       ("Tab / f", "Return to feed"),
     ],
   ),
@@ -3615,6 +3860,14 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
       ("Ldr+v", "Toggle bottom feed panel (dual mode)"),
       ("Ldr+n", "Toggle notes panel"),
       ("q / Esc", "Close / step back reader state"),
+      ("", ""),
+      ("Bottom feed panel", ""),
+      ("j / k", "Navigate or scroll details"),
+      ("d", "Toggle feed/details view"),
+      ("/", "Search feed"),
+      ("Tab", "Switch Inbox / Discoveries"),
+      ("Enter", "Open selected paper"),
+      ("q / Esc", "Close bottom panel"),
       ("", ""),
       ("Tabs", ""),
       ("Ldr+t", "Open in new tab (prompt if dual)"),
@@ -3636,6 +3889,13 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
     &[
       ("Tab", "Switch Inbox / Discoveries"),
       ("/", "Open AI topic search"),
+      ("Enter", "Run search or command"),
+      ("Ctrl+N", "Force new search"),
+      ("", ""),
+      ("Command palette", ""),
+      ("Up / Down", "Navigate commands"),
+      ("Tab", "Complete selected command"),
+      ("Esc", "Close search input"),
       ("", ""),
       ("Plan checklist", ""),
       ("j / k", "Navigate results"),
@@ -3650,6 +3910,15 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
       ("Enter", "Send message"),
       ("j / k", "Scroll chat history"),
       ("Esc", "Back to session list"),
+      ("/", "Open slash command palette"),
+      ("Tab", "Complete slash command"),
+      ("Up / Down", "Navigate slash commands"),
+      ("Ctrl+n / Ctrl+p", "Next / previous slash command"),
+      ("", ""),
+      ("Session list", ""),
+      ("n", "New session"),
+      ("d", "Delete session"),
+      ("Enter", "Open session"),
       ("Ldr+c", "Close chat panel"),
       ("Ldr+z", "Move chat top / bottom"),
     ],
@@ -3657,7 +3926,7 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
   (
     "Settings",
     &[
-      ("Ldr+S", "Open settings"),
+      ("Ldr+s", "Open settings"),
       ("j / k", "Navigate fields"),
       ("Enter", "Edit field or cycle option"),
       ("s / S", "Save all fields"),
@@ -3669,6 +3938,23 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
       ("Enter / /", "Add custom source (URL)"),
       ("d", "Delete custom feed"),
       ("Esc", "Back to settings"),
+      ("", ""),
+      ("Theme picker", ""),
+      ("j / k", "Preview theme"),
+      ("Enter", "Select / create theme"),
+      ("e", "Edit custom theme"),
+      ("d", "Delete custom theme"),
+      ("Esc", "Cancel picker"),
+      ("", ""),
+      ("Theme editor", ""),
+      ("j / k", "Choose color role"),
+      ("h / l", "Choose hue"),
+      ("[ / ]", "Choose shade"),
+      ("Space", "Apply color"),
+      ("x", "Edit hex value"),
+      ("n", "Rename theme"),
+      ("r", "Reset to base theme"),
+      ("s / Enter", "Save custom theme"),
     ],
   ),
   (

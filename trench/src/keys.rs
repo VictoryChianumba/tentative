@@ -72,6 +72,13 @@ pub fn dispatch(key: KeyEvent, app: &mut App) {
   if handle_help_overlay(key, app) {
     return;
   }
+  if key.code == KeyCode::Char('?') && !is_text_entry_context(app) {
+    app.leader_active = false;
+    app.help_active = true;
+    app.help_section = 0;
+    app.help_scroll = 0;
+    return;
+  }
   if handle_leader_or_ctrl_t(key, app) {
     return;
   }
@@ -94,6 +101,26 @@ pub fn dispatch(key: KeyEvent, app: &mut App) {
     return;
   }
   handle_feed_view(key, app);
+}
+
+fn is_text_entry_context(app: &App) -> bool {
+  if app.search_active || app.sources_input_active || app.settings_editing {
+    return true;
+  }
+  if app.feed_tab == FeedTab::Discoveries && app.discovery_search_focused {
+    return true;
+  }
+  if app.chat_active && app.focused_pane == PaneId::Chat {
+    return true;
+  }
+  if app.notes_active && app.focused_pane == PaneId::Notes {
+    return true;
+  }
+  app.custom_theme_editor
+    .as_ref()
+    .is_some_and(|editor| {
+      matches!(editor.mode, CustomThemeEditorMode::Name | CustomThemeEditorMode::Hex)
+    })
 }
 
 fn handle_reader_bottom_pane(key: KeyEvent, app: &mut App) {
@@ -341,7 +368,7 @@ fn handle_leader(key: KeyEvent, app: &mut App) {
         app.focused_pane = PaneId::Chat;
       }
     }
-    KeyCode::Char('S') => {
+    KeyCode::Char('s') => {
       app.settings_github_token =
         app.config.github_token.clone().unwrap_or_default();
       app.settings_s2_key =
@@ -354,6 +381,10 @@ fn handle_leader(key: KeyEvent, app: &mut App) {
         app.config.default_chat_provider.clone();
       app.settings_field = 0;
       app.settings_editing = false;
+      app.sources_cursor = 0;
+      app.sources_input.clear();
+      app.sources_input_active = false;
+      app.sources_detect_state = SourcesDetectState::Idle;
       app.view = AppView::Settings;
     }
     KeyCode::Char('z') => {
@@ -429,12 +460,6 @@ fn handle_leader(key: KeyEvent, app: &mut App) {
         app.reader_split_active = true;
         app.focused_pane = PaneId::Feed;
       }
-    }
-    KeyCode::Char('s') => {
-      app.sources_cursor = 0;
-      app.sources_input.clear();
-      app.sources_input_active = false;
-      app.view = AppView::Sources;
     }
     KeyCode::Char('?') => {
       app.help_active = true;
@@ -1829,7 +1854,11 @@ fn handle_feed_view(key: KeyEvent, app: &mut App) {
       KeyCode::Char('f') => {
         app.filter_focus = true;
       }
-      KeyCode::Esc => app.should_quit = true,
+      KeyCode::Char('q') => app.should_quit = true,
+      KeyCode::Esc => {
+        app.clear_notification();
+        app.status_message = None;
+      }
       KeyCode::Char('l') | KeyCode::Right => {}
       KeyCode::Char('h') | KeyCode::Left => {
         // already on Feed — no-op
