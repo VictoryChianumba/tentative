@@ -111,6 +111,7 @@ fn item_to_feed(work: CrWork) -> Option<FeedItem> {
     source_name: "crossref".to_string(),
   };
   item.signal = item.compute_signal();
+  item.sanitize_in_place();
   Some(item)
 }
 

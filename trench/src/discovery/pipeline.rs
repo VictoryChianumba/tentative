@@ -16,10 +16,21 @@ pub fn spawn_discovery(
   intent: QueryIntent,
 ) {
   std::thread::spawn(move || {
-    if config.claude_api_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
-      agent::run(&topic, &config, &tx, prior_history, intent);
-    } else {
-      run_fallback(&topic, &config, &tx);
+    let tx_panic = tx.clone();
+    let result =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if config.claude_api_key.as_deref().map(|k| !k.trim().is_empty()).unwrap_or(false) {
+          agent::run(&topic, &config, &tx, prior_history, intent);
+        } else {
+          run_fallback(&topic, &config, &tx);
+        }
+      }));
+    if let Err(payload) = result {
+      let msg = crate::panic_msg(payload);
+      log::error!("discovery::spawn_discovery: thread panicked — {msg}");
+      let _ = tx_panic.send(DiscoveryMessage::Error(format!(
+        "discovery thread panicked: {msg}"
+      )));
     }
   });
 }

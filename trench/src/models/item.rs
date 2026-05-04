@@ -223,4 +223,31 @@ impl FeedItem {
       | SourcePlatform::Core => SignalLevel::Tertiary,
     }
   }
+
+  /// Strip terminal escape sequences and bare control bytes from every string
+  /// field that originates from a network source. Should be called once at
+  /// ingestion (after the FeedItem is fully assembled) and again at cache
+  /// load (defense-in-depth for items persisted before this fix shipped).
+  ///
+  /// Idempotent: re-sanitizing already-clean text leaves it unchanged.
+  ///
+  /// `id` and `url` are app-constructed (we always interpolate them from
+  /// validated source IDs or known URL templates), so they're not sanitized
+  /// here — sanitizing them would mask construction bugs rather than fix the
+  /// real attack surface.
+  pub fn sanitize_in_place(&mut self) {
+    use crate::sanitize::sanitize_terminal_text;
+    self.title = sanitize_terminal_text(&self.title);
+    self.summary_short = sanitize_terminal_text(&self.summary_short);
+    self.source_name = sanitize_terminal_text(&self.source_name);
+    for author in &mut self.authors {
+      *author = sanitize_terminal_text(author);
+    }
+    for tag in &mut self.domain_tags {
+      *tag = sanitize_terminal_text(tag);
+    }
+    if let Some(content) = &mut self.full_content {
+      *content = sanitize_terminal_text(content);
+    }
+  }
 }

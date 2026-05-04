@@ -273,6 +273,7 @@ fn parse_feed(
             source_name: source_name.to_string(),
           };
           item.signal = item.compute_signal();
+          item.sanitize_in_place();
           items.push(item);
 
           title.clear();

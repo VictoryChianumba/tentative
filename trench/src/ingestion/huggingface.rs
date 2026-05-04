@@ -221,6 +221,7 @@ fn parse_papers(html: &str, today: &str) -> Vec<FeedItem> {
       source_name: "huggingface".to_string(),
     };
     item.signal = item.compute_signal();
+    item.sanitize_in_place();
     items.push(item);
   }
 

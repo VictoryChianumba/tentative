@@ -132,6 +132,7 @@ fn note_to_item(note: OrNote) -> Option<FeedItem> {
     source_name: "openreview".to_string(),
   };
   item.signal = item.compute_signal();
+  item.sanitize_in_place();
   Some(item)
 }
 

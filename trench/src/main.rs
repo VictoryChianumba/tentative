@@ -10,6 +10,7 @@ mod ingestion;
 mod keys;
 mod library;
 mod models;
+mod sanitize;
 mod store;
 mod syntax;
 mod tags;
@@ -42,6 +43,90 @@ pub(crate) fn open_url(url: &str) {
   let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
+/// Extract a human-readable message from a panic payload returned by
+/// `std::panic::catch_unwind`. Used by every `spawn_*` helper below so that
+/// thread panics surface to the UI as a routed error rather than a silent
+/// thread death + forever-spinner. Idiomatic for both `panic!("...")` (which
+/// boxes a `&'static str`) and `panic!("{}", x)` (which boxes a `String`).
+pub(crate) fn panic_msg(payload: Box<dyn std::any::Any + Send>) -> String {
+  if let Some(s) = payload.downcast_ref::<&'static str>() {
+    (*s).to_string()
+  } else if let Some(s) = payload.downcast_ref::<String>() {
+    s.clone()
+  } else {
+    "thread panicked (non-string payload)".to_string()
+  }
+}
+
+#[cfg(test)]
+mod panic_msg_tests {
+  use super::panic_msg;
+
+  #[test]
+  fn extracts_static_str_payload() {
+    let result = std::panic::catch_unwind(|| panic!("static literal"));
+    assert_eq!(panic_msg(result.unwrap_err()), "static literal");
+  }
+
+  #[test]
+  fn extracts_owned_string_payload() {
+    let result = std::panic::catch_unwind(|| {
+      let n: i32 = 42;
+      panic!("formatted message: {n}")
+    });
+    assert_eq!(panic_msg(result.unwrap_err()), "formatted message: 42");
+  }
+
+  #[test]
+  fn falls_back_for_non_string_payload() {
+    let result = std::panic::catch_unwind(|| {
+      // Payload is a non-string type (a struct).
+      std::panic::panic_any(42i32)
+    });
+    assert_eq!(
+      panic_msg(result.unwrap_err()),
+      "thread panicked (non-string payload)"
+    );
+  }
+
+  #[test]
+  fn channel_routing_via_catch_unwind_smoke() {
+    // Smoke test for the spawn_*-pattern: a thread that panics must surface
+    // via the cloned sender rather than dying silently.
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel::<Result<i32, String>>();
+
+    std::thread::spawn(move || {
+      let tx_panic = tx.clone();
+      let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          panic!("simulated worker failure");
+        }));
+      // The closure body is unconditional `panic!`, so the closure's return
+      // type is `!` and `outcome` is provably `Err(_)` — let-else makes that
+      // explicit and avoids an irrefutable-pattern lint.
+      let Err(payload) = outcome else {
+        unreachable!("catch_unwind of a panicking closure cannot be Ok");
+      };
+      let msg = panic_msg(payload);
+      let _ = tx_panic.send(Err(format!("panicked: {msg}")));
+    })
+    .join()
+    .ok();
+
+    let received = rx
+      .recv_timeout(std::time::Duration::from_secs(1))
+      .expect("receiver should get the panic-routed Err");
+    match received {
+      Err(s) => assert!(
+        s.contains("simulated worker failure"),
+        "got: {s}"
+      ),
+      Ok(n) => panic!("expected Err, got Ok({n})"),
+    }
+  }
+}
+
 pub(crate) fn truncate_for_notif(s: &str, max: usize) -> String {
   let mut chars = s.chars();
   let mut out = String::new();
@@ -61,8 +146,10 @@ pub(crate) fn truncate_for_notif(s: &str, max: usize) -> String {
 
 fn spawn_fetch(tx: mpsc::Sender<FetchMessage>, config: config::Config) {
   std::thread::spawn(move || {
-    let enabled = |name: &str| -> bool {
-      config.sources.enabled_sources.get(name).copied().unwrap_or(true)
+    let tx_panic = tx.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let enabled = |name: &str| -> bool {
+        config.sources.enabled_sources.get(name).copied().unwrap_or(true)
     };
 
     let mut all_items: Vec<models::FeedItem> = Vec::new();
@@ -252,6 +339,16 @@ fn spawn_fetch(tx: mpsc::Sender<FetchMessage>, config: config::Config) {
     let _ = tx.send(FetchMessage::Items(all_items));
     let _ = tx.send(FetchMessage::SourceComplete("enriching".to_string()));
     let _ = tx.send(FetchMessage::AllComplete);
+    }));
+    if let Err(payload) = result {
+      let msg = panic_msg(payload);
+      log::error!("spawn_fetch: background thread panicked — {msg}");
+      let _ = tx_panic.send(FetchMessage::SourceError(
+        "background".to_string(),
+        format!("background thread panicked: {msg}"),
+      ));
+      let _ = tx_panic.send(FetchMessage::AllComplete);
+    }
   });
 }
 
@@ -262,7 +359,18 @@ pub(crate) fn spawn_discovery(
   tx: std::sync::mpsc::Sender<DiscoverResult>,
 ) {
   std::thread::spawn(move || {
-    let _ = tx.send(discover_feed(&url));
+    let tx_panic = tx.clone();
+    let result =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = tx.send(discover_feed(&url));
+      }));
+    if let Err(payload) = result {
+      let msg = panic_msg(payload);
+      log::error!("spawn_discovery: thread panicked — {msg}");
+      let _ = tx_panic.send(DiscoverResult::Failed(format!(
+        "discovery thread panicked: {msg}"
+      )));
+    }
   });
 }
 
@@ -635,7 +743,16 @@ pub(crate) fn spawn_fulltext_fetch(
   tx: mpsc::Sender<Result<Vec<String>, String>>,
 ) {
   std::thread::spawn(move || {
-    let _ = tx.send(ingestion::fulltext::fetch(&item));
+    let tx_panic = tx.clone();
+    let result =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = tx.send(ingestion::fulltext::fetch(&item));
+      }));
+    if let Err(payload) = result {
+      let msg = panic_msg(payload);
+      log::error!("spawn_fulltext_fetch: thread panicked — {msg}");
+      let _ = tx_panic.send(Err(format!("fulltext thread panicked: {msg}")));
+    }
   });
 }
 
@@ -646,18 +763,30 @@ pub(crate) fn spawn_repo_open(
   tx: mpsc::Sender<RepoFetchResult>,
 ) {
   std::thread::spawn(move || {
-    let branch = match github::get_default_branch(&owner, &repo, &token) {
-      Err(e) => {
-        let _ = tx.send(RepoFetchResult::RepoOpened {
-          branch: String::new(),
-          tree: Err(e),
-        });
-        return;
-      }
-      Ok(b) => b,
-    };
-    let tree = github::fetch_tree_dir(&owner, &repo, &branch, "", &token);
-    let _ = tx.send(RepoFetchResult::RepoOpened { branch, tree });
+    let tx_panic = tx.clone();
+    let result =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let branch = match github::get_default_branch(&owner, &repo, &token) {
+          Err(e) => {
+            let _ = tx.send(RepoFetchResult::RepoOpened {
+              branch: String::new(),
+              tree: Err(e),
+            });
+            return;
+          }
+          Ok(b) => b,
+        };
+        let tree = github::fetch_tree_dir(&owner, &repo, &branch, "", &token);
+        let _ = tx.send(RepoFetchResult::RepoOpened { branch, tree });
+      }));
+    if let Err(payload) = result {
+      let msg = panic_msg(payload);
+      log::error!("spawn_repo_open: thread panicked — {msg}");
+      let _ = tx_panic.send(RepoFetchResult::RepoOpened {
+        branch: String::new(),
+        tree: Err(format!("repo-open thread panicked: {msg}")),
+      });
+    }
   });
 }
 
@@ -670,8 +799,22 @@ pub(crate) fn spawn_repo_dir(
   tx: mpsc::Sender<RepoFetchResult>,
 ) {
   std::thread::spawn(move || {
-    let result = github::fetch_tree_dir(&owner, &repo, &branch, &path, &token);
-    let _ = tx.send(RepoFetchResult::DirLoaded { path, result });
+    let tx_panic = tx.clone();
+    let path_panic = path.clone();
+    let outcome =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result =
+          github::fetch_tree_dir(&owner, &repo, &branch, &path, &token);
+        let _ = tx.send(RepoFetchResult::DirLoaded { path, result });
+      }));
+    if let Err(payload) = outcome {
+      let msg = panic_msg(payload);
+      log::error!("spawn_repo_dir: thread panicked — {msg}");
+      let _ = tx_panic.send(RepoFetchResult::DirLoaded {
+        path: path_panic,
+        result: Err(format!("repo-dir thread panicked: {msg}")),
+      });
+    }
   });
 }
 
@@ -684,8 +827,23 @@ pub(crate) fn spawn_repo_file(
   tx: mpsc::Sender<RepoFetchResult>,
 ) {
   std::thread::spawn(move || {
-    let result = github::fetch_file(&owner, &repo, &path, &token);
-    let _ = tx.send(RepoFetchResult::FileLoaded { path, name, result });
+    let tx_panic = tx.clone();
+    let path_panic = path.clone();
+    let name_panic = name.clone();
+    let outcome =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = github::fetch_file(&owner, &repo, &path, &token);
+        let _ = tx.send(RepoFetchResult::FileLoaded { path, name, result });
+      }));
+    if let Err(payload) = outcome {
+      let msg = panic_msg(payload);
+      log::error!("spawn_repo_file: thread panicked — {msg}");
+      let _ = tx_panic.send(RepoFetchResult::FileLoaded {
+        path: path_panic,
+        name: name_panic,
+        result: Err(format!("repo-file thread panicked: {msg}")),
+      });
+    }
   });
 }
 
@@ -776,20 +934,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   // Install a panic hook that restores the terminal before printing the
-  // backtrace.  Without this, a panic (including in a spawned thread whose
-  // panic aborts via double-panic) leaves the terminal in raw/alt-screen mode
-  // and the user sees a completely garbled display rather than a clear error.
-  let default_hook = std::panic::take_hook();
-  std::panic::set_hook(Box::new(move |info| {
-    // Best-effort terminal restore — ignore errors.
-    let _ = crossterm::terminal::disable_raw_mode();
-    let _ = crossterm::execute!(
-      io::stderr(),
-      crossterm::terminal::LeaveAlternateScreen,
-      crossterm::event::DisableMouseCapture,
-    );
-    default_hook(info);
-  }));
+  // backtrace. Shared with standalone hygg-reader via cli-text-reader so both
+  // binaries get identical recovery behaviour.
+  cli_text_reader::install_terminal_panic_hook();
 
   enable_raw_mode()?;
   let mut stdout = io::stdout();

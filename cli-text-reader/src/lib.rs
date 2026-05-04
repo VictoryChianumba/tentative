@@ -28,6 +28,36 @@ pub use editor::Editor;
 // Embeddable ratatui API
 pub use editor::{EditorAction, draw as draw_editor, run_ratatui};
 
+/// Install a panic hook that restores the terminal (disable raw mode, leave
+/// alternate screen, disable mouse capture, show cursor) before chaining to
+/// the previous default hook. Idempotent — calling repeatedly just replaces
+/// the existing hook with one that has the same semantics.
+///
+/// Both `trench` and standalone `hygg-reader` should call this near the top
+/// of `main()`, **before** `enable_raw_mode()`. Without it, a panic anywhere
+/// in the editor (including a panic propagating from a spawned thread) leaves
+/// the terminal in raw / alt-screen mode and the user has to blindly type
+/// `reset` to recover.
+pub fn install_terminal_panic_hook() {
+  let default_hook = std::panic::take_hook();
+  std::panic::set_hook(Box::new(move |info| {
+    // Best-effort terminal restore — every step ignores errors so a partial
+    // failure (e.g. stderr already closed) doesn't prevent the rest from
+    // running and doesn't trigger a double-panic.
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = crossterm::execute!(
+      std::io::stderr(),
+      crossterm::terminal::LeaveAlternateScreen,
+      crossterm::event::DisableMouseCapture,
+      crossterm::cursor::Show,
+    );
+    // Blank line before the panic message so it doesn't collide with any
+    // partial frame the alt-screen leave just flushed.
+    eprintln!();
+    default_hook(info);
+  }));
+}
+
 pub fn run_cli_text_reader(
   lines: Vec<String>,
   col: usize,

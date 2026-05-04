@@ -227,6 +227,7 @@ fn parse_atom(xml: &str) -> Result<Vec<FeedItem>, String> {
             source_name: "arxiv".to_string(),
           };
           item.signal = item.compute_signal();
+          item.sanitize_in_place();
           items.push(item);
 
           // Reset accumulators for next entry

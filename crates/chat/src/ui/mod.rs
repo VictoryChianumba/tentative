@@ -1112,8 +1112,24 @@ impl ChatUi {
     self.scroll_offset = usize::MAX;
 
     std::thread::spawn(move || {
-      let result = provider.send(&messages).map_err(|e| e.to_string());
-      let _ = tx.send(result);
+      let tx_panic = tx.clone();
+      let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          let result = provider.send(&messages).map_err(|e| e.to_string());
+          let _ = tx.send(result);
+        }));
+      if let Err(payload) = outcome {
+        let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
+          (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+          s.clone()
+        } else {
+          "thread panicked (non-string payload)".to_string()
+        };
+        log::error!("chat provider thread panicked — {msg}");
+        let _ = tx_panic
+          .send(Err(format!("chat provider thread panicked: {msg}")));
+      }
     });
 
     ChatAction::None
@@ -1150,7 +1166,7 @@ impl ChatUi {
           let content = if msg.content.is_empty() {
             " ".to_string()
           } else {
-            msg.content.clone()
+            crate::sanitize::sanitize_terminal_text(&msg.content)
           };
           let inner_width = wrap_width.saturating_sub(2).max(1);
           let mut msg_first = true;
@@ -1185,12 +1201,17 @@ impl ChatUi {
 
         Role::Assistant => {
           let base_style = Style::default().fg(t.text);
+          // Sanitize the assistant's content before doing anything else with
+          // it: terminal-escape sequences in a streamed response (whether
+          // adversarial or just an artifact of model-generated text) must
+          // never reach the renderer.
+          let safe_content = crate::sanitize::sanitize_terminal_text(&msg.content);
           // Show streaming cursor on the last message while streaming.
           let is_last = i + 1 == msgs.len();
           let display_content = if self.is_streaming && is_last {
-            format!("{}█", msg.content)
+            format!("{safe_content}█")
           } else {
-            msg.content.clone()
+            safe_content
           };
 
           let content = if display_content.is_empty() {

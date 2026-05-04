@@ -136,12 +136,22 @@ fn run_with_timeout(
   let mut stdout = child.stdout.take().expect("piped stdout");
   let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
   std::thread::spawn(move || {
-    let mut buf = Vec::new();
-    let result = stdout
-      .read_to_end(&mut buf)
-      .map(|_| buf)
-      .map_err(|e| format!("read: {e}"));
-    tx.send(result).ok();
+    let tx_panic = tx.clone();
+    let outcome =
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut buf = Vec::new();
+        let result = stdout
+          .read_to_end(&mut buf)
+          .map(|_| buf)
+          .map_err(|e| format!("read: {e}"));
+        tx.send(result).ok();
+      }));
+    if let Err(payload) = outcome {
+      let msg = crate::panic_msg(payload);
+      log::error!("chromium pipe reader: thread panicked — {msg}");
+      let _ = tx_panic
+        .send(Err(format!("chromium reader thread panicked: {msg}")));
+    }
   });
 
   let deadline = Instant::now() + timeout;
@@ -350,45 +360,13 @@ fn strip_html(html: &str) -> String {
 // Post-processing
 // ---------------------------------------------------------------------------
 
-fn strip_ansi(s: &str) -> String {
-  let mut out = String::with_capacity(s.len());
-  let mut chars = s.chars().peekable();
-  while let Some(c) = chars.next() {
-    if c == '\x1b' {
-      match chars.peek() {
-        Some('[') => {
-          // CSI sequence — ends at the first alphabetic character.
-          chars.next();
-          for ch in chars.by_ref() {
-            if ch.is_ascii_alphabetic() { break; }
-          }
-        }
-        Some(']') => {
-          // OSC sequence — ends at BEL (\x07) or ST (\x1b\).
-          chars.next();
-          let mut prev = '\0';
-          for ch in chars.by_ref() {
-            if ch == '\x07' { break; }
-            if prev == '\x1b' && ch == '\\' { break; }
-            prev = ch;
-          }
-        }
-        _ => { chars.next(); } // bare ESC or other — skip one char
-      }
-    } else {
-      out.push(c);
-    }
-  }
-  out
-}
-
 fn wrap_lines(text: &str, width: usize) -> Vec<String> {
   let mut paragraphs: Vec<String> = Vec::new();
   let mut current = String::new();
   let mut blank_run = 0usize;
 
   for raw_line in text.lines() {
-    let stripped = strip_ansi(raw_line);
+    let stripped = crate::sanitize::sanitize_terminal_text(raw_line);
     let line = stripped.trim();
     if line.is_empty() {
       blank_run += 1;

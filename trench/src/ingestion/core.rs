@@ -95,6 +95,7 @@ fn work_to_item(work: CoreWork) -> Option<FeedItem> {
     source_name: "core".to_string(),
   };
   item.signal = item.compute_signal();
+  item.sanitize_in_place();
   Some(item)
 }
 

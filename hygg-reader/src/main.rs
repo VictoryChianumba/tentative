@@ -79,6 +79,11 @@ pub fn which(binary: &str) -> Option<std::path::PathBuf> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  // Restore the terminal on panic. Must be installed before any code path
+  // that may enable raw mode / enter the alternate screen, otherwise a panic
+  // in startup (e.g. malformed PDF, missing dep) leaves the terminal broken.
+  cli_text_reader::install_terminal_panic_hook();
+
   let args = Args::parse();
 
   // Check if stdin has content

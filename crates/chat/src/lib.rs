@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub mod provider;
 pub mod provider_registry;
 pub mod providers;
+pub(crate) mod sanitize;
 pub mod storage;
 pub mod ui;
 
