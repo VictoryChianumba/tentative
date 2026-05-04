@@ -353,9 +353,11 @@ fn normalise_date(raw: &str) -> String {
   if s.is_empty() {
     return String::new();
   }
-  // ISO 8601: starts with YYYY-
+  // ISO 8601: starts with YYYY-. Use char-aware truncation; a hostile
+  // pubDate could place a multi-byte char at bytes 5-9 even with byte 4
+  // being ASCII '-', and `s[..10]` byte-slicing would panic mid-codepoint.
   if s.len() >= 10 && s.as_bytes().get(4) == Some(&b'-') {
-    return s[..10].to_string();
+    return crate::sanitize::truncate_chars(s, 10).into_owned();
   }
   // RFC 2822: strip optional "Day, " prefix
   let s = match s.find(',') {

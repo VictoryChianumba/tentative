@@ -94,7 +94,7 @@ fn playback_loop(
   let (_stream, handle) = match rodio::OutputStream::try_default() {
     Ok(r) => r,
     Err(e) => {
-      *error.lock().unwrap() = Some(format!("Audio init failed: {e}"));
+      *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio init failed: {e}"));
       return;
     }
   };
@@ -106,7 +106,7 @@ fn playback_loop(
         let sink = match rodio::Sink::try_new(&handle) {
           Ok(s) => s,
           Err(e) => {
-            *error.lock().unwrap() = Some(format!("Audio sink error: {e}"));
+            *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio sink error: {e}"));
             continue;
           }
         };
@@ -123,11 +123,11 @@ fn playback_loop(
               }
               PlaybackCommand::Pause => {
                 sink.pause();
-                *status.lock().unwrap() = PlaybackStatus::Paused;
+                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Paused;
               }
               PlaybackCommand::Resume => {
                 sink.play();
-                *status.lock().unwrap() = PlaybackStatus::Playing;
+                *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Playing;
               }
               PlaybackCommand::Start { .. } => {
                 was_stopped = true;
@@ -138,7 +138,7 @@ fn playback_loop(
 
           let buf = match provider.stream(&chunk_text) {
             Err(msg) => {
-              *error.lock().unwrap() = Some(msg);
+              *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
               was_stopped = true;
               break 'chunks;
             }
@@ -163,17 +163,17 @@ fn playback_loop(
           let chunk_len = chunk_text.len();
           match rodio::Decoder::new(buf) {
             Ok(source) => {
-              *playing_info.lock().unwrap() = Some(VoicePlayingInfo {
+              *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = Some(VoicePlayingInfo {
                 doc_start_line,
                 doc_end_line,
                 started_at: Instant::now(),
                 chars_before_chunk: chars_before,
               });
-              *status.lock().unwrap() = PlaybackStatus::Playing;
+              *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Playing;
               sink.append(source);
             }
             Err(e) => {
-              *error.lock().unwrap() = Some(format!("Audio decode error: {e}"));
+              *error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("Audio decode error: {e}"));
               was_stopped = true;
               break 'chunks;
             }
@@ -189,12 +189,12 @@ fn playback_loop(
                 }
                 PlaybackCommand::Pause => {
                   sink.pause();
-                  *status.lock().unwrap() = PlaybackStatus::Paused;
+                  *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Paused;
                   'paused: for pcmd in cmd_rx.iter() {
                     match pcmd {
                       PlaybackCommand::Resume => {
                         sink.play();
-                        *status.lock().unwrap() = PlaybackStatus::Playing;
+                        *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Playing;
                         break 'paused;
                       }
                       PlaybackCommand::Stop => {
@@ -223,14 +223,14 @@ fn playback_loop(
         }
 
         let _ = was_stopped;
-        *playing_info.lock().unwrap() = None;
-        *status.lock().unwrap() = PlaybackStatus::Idle;
+        *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
       }
 
       // ------------------------------------------------------------------ //
       PlaybackCommand::Stop => {
-        *playing_info.lock().unwrap() = None;
-        *status.lock().unwrap() = PlaybackStatus::Idle;
+        *playing_info.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *status.lock().unwrap_or_else(|e| e.into_inner()) = PlaybackStatus::Idle;
       }
       PlaybackCommand::Pause | PlaybackCommand::Resume => {}
     }

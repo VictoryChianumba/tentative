@@ -165,7 +165,10 @@ fn friendly_error(status: u16, body: &str) -> String {
         }
         _ => {
           let msg = v["error"]["message"].as_str().unwrap_or("unknown error");
-          let short = if msg.len() > 80 { &msg[..80] } else { msg };
+          // Char-aware truncation — Claude error bodies routinely include
+          // em-dashes and smart quotes; byte-slicing at 80 would panic
+          // mid-codepoint and crash the chat thread.
+          let short = crate::sanitize::truncate_chars(msg, 80);
           format!("API error — {short}")
         }
       };

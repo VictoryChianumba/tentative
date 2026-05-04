@@ -159,7 +159,9 @@ fn friendly_error(status: u16, body: &str) -> String {
         }
         _ => {
           let msg = v["error"]["message"].as_str().unwrap_or("unknown error");
-          let short = if msg.len() > 80 { &msg[..80] } else { msg };
+          // Char-aware truncation — OpenAI error bodies sometimes include
+          // multi-byte chars; byte-slicing at 80 panics mid-codepoint.
+          let short = crate::sanitize::truncate_chars(msg, 80);
           format!("API error — {short}")
         }
       };

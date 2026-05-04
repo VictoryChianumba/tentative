@@ -67,6 +67,32 @@ pub fn fetch_tree_dir(
   Ok(nodes)
 }
 
+/// Reject parent-directory traversal in `path`, then percent-encode every
+/// byte that isn't safe for use inside a URL path segment. Preserves `/`
+/// as a separator. Closes Sec MED #5 (recalibrated from HIGH): the prior
+/// implementation interpolated `path` directly into the URL, allowing a
+/// hostile GitHub tree-listing response with `path = "..?ref=token"` or
+/// `"foo#frag"` to smuggle additional URL components into the request,
+/// where our bearer token is attached.
+fn encode_url_path(path: &str) -> Result<String, String> {
+  if path.contains("..") {
+    return Err(format!(
+      "github: path contains parent-directory segment: {path:?}"
+    ));
+  }
+  let mut out = String::with_capacity(path.len());
+  for &b in path.as_bytes() {
+    let safe = b.is_ascii_alphanumeric()
+      || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/');
+    if safe {
+      out.push(b as char);
+    } else {
+      out.push_str(&format!("%{b:02X}"));
+    }
+  }
+  Ok(out)
+}
+
 /// Returns the raw UTF-8 text of a file.
 /// Returns an error for binary files or files that exceed the GitHub 1 MB limit.
 pub fn fetch_file(
@@ -75,8 +101,10 @@ pub fn fetch_file(
   path: &str,
   token: &str,
 ) -> Result<String, String> {
-  let url =
-    format!("https://api.github.com/repos/{owner}/{repo}/contents/{path}");
+  let encoded_path = encode_url_path(path)?;
+  let url = format!(
+    "https://api.github.com/repos/{owner}/{repo}/contents/{encoded_path}"
+  );
   let resp: FileContent = get_json(&url, token)?;
 
   if resp.encoding.as_deref() != Some("base64") {
@@ -144,4 +172,64 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
   base64::engine::general_purpose::STANDARD
     .decode(s)
     .map_err(|e| format!("base64 decode error: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::encode_url_path;
+
+  #[test]
+  fn encodes_plain_path_unchanged() {
+    assert_eq!(encode_url_path("src/main.rs").unwrap(), "src/main.rs");
+    assert_eq!(encode_url_path("README.md").unwrap(), "README.md");
+    assert_eq!(
+      encode_url_path("path/to/file_name-1.txt").unwrap(),
+      "path/to/file_name-1.txt"
+    );
+  }
+
+  #[test]
+  fn encodes_spaces_as_percent_20() {
+    assert_eq!(
+      encode_url_path("docs/my file.md").unwrap(),
+      "docs/my%20file.md"
+    );
+  }
+
+  #[test]
+  fn encodes_question_mark_to_block_query_smuggling() {
+    // The actionable attack — a path containing `?` smuggles new URL
+    // query parameters that take precedence over the existing query.
+    let encoded = encode_url_path("foo?ref=secret").unwrap();
+    assert!(!encoded.contains('?'), "encoded path: {encoded}");
+    assert!(encoded.contains("%3F"), "encoded path: {encoded}");
+  }
+
+  #[test]
+  fn encodes_hash_to_block_fragment_smuggling() {
+    let encoded = encode_url_path("foo#frag").unwrap();
+    assert!(!encoded.contains('#'), "encoded path: {encoded}");
+    assert!(encoded.contains("%23"), "encoded path: {encoded}");
+  }
+
+  #[test]
+  fn rejects_parent_traversal() {
+    assert!(encode_url_path("../etc/passwd").is_err());
+    assert!(encode_url_path("foo/../bar").is_err());
+    assert!(encode_url_path("foo..bar").is_err()); // two dots anywhere
+  }
+
+  #[test]
+  fn allows_single_dot_segments() {
+    // Single `.` is harmless (current dir reference).
+    assert_eq!(encode_url_path("./foo").unwrap(), "./foo");
+    assert_eq!(encode_url_path("foo.bar").unwrap(), "foo.bar");
+  }
+
+  #[test]
+  fn encodes_non_ascii_via_utf8_bytes() {
+    let encoded = encode_url_path("café.md").unwrap();
+    // é is two bytes in UTF-8 (0xC3 0xA9).
+    assert!(encoded.contains("%C3%A9"), "encoded: {encoded}");
+  }
 }

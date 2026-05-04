@@ -1569,6 +1569,7 @@ impl App {
   }
 
   /// Save the current open file to ~/Downloads/{filename}.
+  // (validate_download_name is defined as a free function below.)
   pub fn repo_download_file(&mut self) {
     let (name, content) = if let Some(ctx) = &self.repo_context {
       match (&ctx.file_name, &ctx.file_lines) {
@@ -1580,6 +1581,17 @@ impl App {
     } else {
       return;
     };
+
+    // Validate the GitHub-supplied filename against path-traversal. The
+    // `name` field comes from `ctx.file_name` which originates in the
+    // GitHub tree-listing response — a malicious or compromised repo could
+    // populate it with `../etc/passwd` or `/etc/passwd`, both of which
+    // `Path::join` happily accepts (an absolute join overwrites the base,
+    // and `..` segments traverse up). Sec HIGH #4 from the audit.
+    if let Err(e) = validate_download_name(&name) {
+      self.set_repo_status(format!("Download rejected: {e}"));
+      return;
+    }
 
     let dest =
       dirs::download_dir().or_else(dirs::home_dir).map(|p| p.join(&name));
@@ -2005,6 +2017,25 @@ fn save_discovery_items(_items: &[FeedItem]) {
   crate::store::discovery_cache::save(_items);
 }
 
+/// Reject a filename that would write outside `~/Downloads/`. `Path::join`
+/// silently accepts absolute paths (replacing the base) and `..` segments
+/// (traversing up); both are realistic vectors when the filename comes
+/// from a GitHub API response on a hostile or compromised repo.
+///
+/// The check: `Path::file_name()` extracts the *terminal* component only.
+/// If that component differs from the input, the input contained either
+/// a path separator or a `..` segment.
+fn validate_download_name(name: &str) -> Result<(), String> {
+  let p = std::path::Path::new(name);
+  if p.is_absolute() {
+    return Err(format!("absolute path not allowed: {name:?}"));
+  }
+  match p.file_name().and_then(|n| n.to_str()) {
+    Some(n) if n == name => Ok(()),
+    _ => Err(format!("path separator or traversal segment: {name:?}")),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -2065,6 +2096,34 @@ mod tests {
         assert_eq!(app.arxiv_id_index.get(aid).copied(), Some(idx));
       }
     }
+  }
+
+  #[test]
+  fn validate_download_name_accepts_plain_filenames() {
+    assert!(super::validate_download_name("foo.zip").is_ok());
+    assert!(super::validate_download_name("README.md").is_ok());
+    assert!(super::validate_download_name("file_name-1.txt").is_ok());
+    // `..foo` (two dots only as part of the filename, no separator) is
+    // technically allowed — it's a single component.
+    assert!(super::validate_download_name("..foo").is_ok());
+  }
+
+  #[test]
+  fn validate_download_name_rejects_traversal() {
+    assert!(super::validate_download_name("../etc/passwd").is_err());
+    assert!(super::validate_download_name("..").is_err());
+  }
+
+  #[test]
+  fn validate_download_name_rejects_absolute_paths() {
+    assert!(super::validate_download_name("/etc/passwd").is_err());
+    assert!(super::validate_download_name("/foo.zip").is_err());
+  }
+
+  #[test]
+  fn validate_download_name_rejects_path_separators() {
+    assert!(super::validate_download_name("dir/file").is_err());
+    assert!(super::validate_download_name("a/b/c").is_err());
   }
 
   #[test]

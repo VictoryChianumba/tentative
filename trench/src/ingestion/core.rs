@@ -6,14 +6,18 @@ use crate::models::{
 };
 
 pub fn fetch(api_key: &str) -> Result<Vec<FeedItem>, String> {
-  let url = format!(
-    "https://api.core.ac.uk/v3/search/works\
-     ?q=artificial+intelligence+machine+learning\
-     &limit=25&sort=recency&apiKey={api_key}"
-  );
+  // CORE API key moved off the URL query string and into the Authorization
+  // header. Previously the key landed in proxy logs, the server access log,
+  // and (on error) reqwest's error message which we log at error level —
+  // the audit's Sec HIGH #8 finding. CORE accepts both `Bearer` and
+  // `X-API-Key` per their docs; Bearer is the standard idiom for this
+  // codebase (chat providers + GitHub all use Bearer).
+  let url = "https://api.core.ac.uk/v3/search/works\
+             ?q=artificial+intelligence+machine+learning\
+             &limit=25&sort=recency";
   let resp = crate::http::client()
-    .get(&url)
-    .header("User-Agent", "trench/1.0")
+    .get(url)
+    .header("Authorization", format!("Bearer {api_key}"))
     .send()
     .map_err(|e| format!("core: HTTP failed: {e}"))?;
   let body =

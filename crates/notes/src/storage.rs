@@ -15,6 +15,18 @@ fn note_path(note_id: &str) -> PathBuf {
   notes_dir().join(format!("{note_id}.json"))
 }
 
+/// Reject note IDs that would escape the notes directory or collide with
+/// system-special filenames. Defense-in-depth in front of every disk-
+/// touching entry point — without this gate, an imported `*.json` whose
+/// `note_id` field carried `"../../etc/foo"` would resolve to a path
+/// outside `notes_dir()`. See `crate::sanitize` for rationale.
+fn validate_id(note_id: &str) -> anyhow::Result<()> {
+  if !crate::sanitize::is_safe_id(note_id) {
+    anyhow::bail!("rejected unsafe note id: {note_id:?}");
+  }
+  Ok(())
+}
+
 /// Crash-safe write: writes to `<path>.tmp`, fsyncs, then renames onto `path`.
 /// A panic, SIGINT, or power loss either leaves the original unchanged or
 /// replaces it atomically — never truncated. Notes are user-authored content,
@@ -52,6 +64,17 @@ pub fn load_all_notes() -> anyhow::Result<Vec<Note>> {
     if path.extension().and_then(|e| e.to_str()) == Some("json") {
       if let Ok(bytes) = std::fs::read(&path) {
         if let Ok(note) = serde_json::from_slice::<Note>(&bytes) {
+          // Reject deserialized notes whose `note_id` field would resolve
+          // outside notes_dir on the next save_note call. The deserialize
+          // succeeded but the note is unsafe to round-trip through disk.
+          if validate_id(&note.note_id).is_err() {
+            log::warn!(
+              "Skipping note with unsafe id at {}: {:?}",
+              path.display(),
+              note.note_id
+            );
+            continue;
+          }
           notes.push(note);
         } else {
           log::warn!("Failed to parse note at {}", path.display());
@@ -63,12 +86,17 @@ pub fn load_all_notes() -> anyhow::Result<Vec<Note>> {
 }
 
 pub fn load_note(note_id: &str) -> Option<Note> {
+  if validate_id(note_id).is_err() {
+    log::warn!("notes::load_note: rejected unsafe id {note_id:?}");
+    return None;
+  }
   let path = note_path(note_id);
   let bytes = std::fs::read(&path).ok()?;
   serde_json::from_slice(&bytes).ok()
 }
 
 pub fn save_note(note: &Note) -> anyhow::Result<()> {
+  validate_id(&note.note_id)?;
   let dir = notes_dir();
   std::fs::create_dir_all(&dir)?;
   let bytes = serde_json::to_vec_pretty(note)?;
@@ -77,6 +105,7 @@ pub fn save_note(note: &Note) -> anyhow::Result<()> {
 }
 
 pub fn delete_note(note_id: &str) -> anyhow::Result<()> {
+  validate_id(note_id)?;
   let path = note_path(note_id);
   if path.exists() {
     std::fs::remove_file(&path)?;

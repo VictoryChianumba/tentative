@@ -30,24 +30,24 @@ impl StreamBuffer {
   }
 
   pub fn buffered_len(&self) -> usize {
-    self.shared.0.lock().unwrap().data.len()
+    self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).data.len()
   }
 
   pub fn is_done(&self) -> bool {
-    self.shared.0.lock().unwrap().done
+    self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).done
   }
 }
 
 impl StreamWriter {
   pub fn push(&self, chunk: &[u8]) {
     let (lock, cvar) = &*self.shared;
-    lock.lock().unwrap().data.extend_from_slice(chunk);
+    lock.lock().unwrap_or_else(|e| e.into_inner()).data.extend_from_slice(chunk);
     cvar.notify_all();
   }
 
   pub fn finish(self) {
     let (lock, cvar) = &*self.shared;
-    lock.lock().unwrap().done = true;
+    lock.lock().unwrap_or_else(|e| e.into_inner()).done = true;
     cvar.notify_all();
   }
 }
@@ -55,7 +55,7 @@ impl StreamWriter {
 impl Read for StreamBuffer {
   fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
     let (lock, cvar) = &*self.shared;
-    let mut inner = lock.lock().unwrap();
+    let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
     loop {
       let available = inner.data.len().saturating_sub(self.pos);
       if available > 0 {
@@ -68,7 +68,7 @@ impl Read for StreamBuffer {
       if inner.done {
         return Ok(0);
       }
-      inner = cvar.wait(inner).unwrap();
+      inner = cvar.wait(inner).unwrap_or_else(|e| e.into_inner());
     }
   }
 }
@@ -78,7 +78,7 @@ impl Seek for StreamBuffer {
     let (lock, cvar) = &*self.shared;
 
     let (len, done) = {
-      let inner = lock.lock().unwrap();
+      let inner = lock.lock().unwrap_or_else(|e| e.into_inner());
       (inner.data.len(), inner.done)
     };
 
@@ -110,9 +110,9 @@ impl Seek for StreamBuffer {
 
     // Forward seek past what we have: wait on condvar until bytes arrive.
     {
-      let mut inner = lock.lock().unwrap();
+      let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
       while inner.data.len() < new_pos && !inner.done {
-        inner = cvar.wait(inner).unwrap();
+        inner = cvar.wait(inner).unwrap_or_else(|e| e.into_inner());
       }
     }
 

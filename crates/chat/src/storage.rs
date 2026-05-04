@@ -46,6 +46,20 @@ fn session_path(id: &str) -> PathBuf {
   chats_dir().join(format!("{id}.json"))
 }
 
+/// Reject session IDs that would escape the chats directory or collide
+/// with system-special filenames. Defense-in-depth in front of every
+/// disk-touching entry point — without this gate, an imported `index.json`
+/// or `session.json` with `id = "../../etc/foo"` would resolve to a path
+/// outside `chats_dir()`.
+fn validate_id(id: &str) -> Result<(), anyhow::Error> {
+  if !crate::sanitize::is_safe_id(id) {
+    return Err(anyhow::anyhow!(
+      "rejected unsafe chat session id: {id:?}"
+    ));
+  }
+  Ok(())
+}
+
 fn ensure_dir() -> Result<()> {
   let dir = chats_dir();
   if !dir.exists() {
@@ -77,6 +91,10 @@ pub fn save_index(index: &ChatIndex) -> Result<()> {
 }
 
 pub fn load_session(id: &str) -> Option<ChatSession> {
+  if validate_id(id).is_err() {
+    log::warn!("chat::load_session: rejected unsafe id {id:?}");
+    return None;
+  }
   let path = session_path(id);
   if !path.exists() {
     return None;
@@ -86,6 +104,7 @@ pub fn load_session(id: &str) -> Option<ChatSession> {
 }
 
 pub fn save_session(session: &ChatSession) -> Result<()> {
+  validate_id(&session.id)?;
   ensure_dir()?;
   let data = serde_json::to_string_pretty(session)?;
   atomic_write(&session_path(&session.id), data.as_bytes())?;
@@ -93,6 +112,7 @@ pub fn save_session(session: &ChatSession) -> Result<()> {
 }
 
 pub fn delete_session(id: &str) -> Result<()> {
+  validate_id(id)?;
   let path = session_path(id);
   if path.exists() {
     fs::remove_file(path)?;

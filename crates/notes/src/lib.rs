@@ -10,6 +10,7 @@ pub mod editor;
 pub mod entries_list;
 pub mod filter;
 pub mod history;
+pub(crate) mod sanitize;
 pub mod sorter;
 pub mod storage;
 pub mod theme;

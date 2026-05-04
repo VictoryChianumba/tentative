@@ -339,7 +339,10 @@ fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
 fn friendly_error(status: u16, body: &str) -> String {
   if let Ok(v) = serde_json::from_str::<Value>(body) {
     if let Some(msg) = v["error"]["message"].as_str() {
-      let short = &msg[..msg.len().min(100)];
+      // Char-aware truncation: API error bodies may contain multi-byte
+      // chars (em-dash, smart quotes, emoji) and byte-slicing at byte 100
+      // can land mid-codepoint, panicking the discovery thread.
+      let short = crate::sanitize::truncate_chars(msg, 100);
       return format!("Claude API — {short}");
     }
   }

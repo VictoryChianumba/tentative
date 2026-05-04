@@ -1510,7 +1510,10 @@ fn parse_api_error(err: &str) -> String {
   {
     return "quota exceeded — check billing".to_string();
   }
-  let short = if err.len() > 80 { &err[..80] } else { err };
+  // Char-aware truncation: API error strings are user-facing and may
+  // include multi-byte chars; byte-slicing at byte 80 risks a mid-
+  // codepoint panic (Reliability HIGH #8 from the audit).
+  let short = crate::sanitize::truncate_chars(err, 80);
   format!("API error — {short}")
 }
 

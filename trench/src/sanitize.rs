@@ -20,6 +20,29 @@
 //! char-walking diverge only inside escape *payloads*, which we discard.
 //! Multi-byte UTF-8 characters in the *visible* text pass through untouched.
 
+/// Truncate `s` to at most `max` *characters* (not bytes), borrowing when
+/// no truncation is needed and allocating only when it does.
+///
+/// `&s[..N]` byte-slicing panics if byte `N` falls in the middle of a
+/// multi-byte UTF-8 sequence — which happens routinely on emoji, em-dash,
+/// or accented characters in API error bodies. The audit's Reliability
+/// HIGH #8 cataloged 5 such panic sites; this helper is the chokepoint
+/// fix.
+///
+/// Returns `Cow<str>` so the common case (input already short enough) is
+/// allocation-free — most error messages truncate to 80-100 chars but
+/// most messages are shorter than that.
+pub(crate) fn truncate_chars(
+  s: &str,
+  max: usize,
+) -> std::borrow::Cow<'_, str> {
+  if s.chars().count() <= max {
+    std::borrow::Cow::Borrowed(s)
+  } else {
+    std::borrow::Cow::Owned(s.chars().take(max).collect())
+  }
+}
+
 /// Strip every ANSI escape sequence, control byte, and DEL from `s`.
 ///
 /// Preserves: printable text (including non-ASCII / multi-byte UTF-8),
@@ -110,7 +133,62 @@ pub(crate) fn sanitize_terminal_text(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::sanitize_terminal_text;
+  use super::{sanitize_terminal_text, truncate_chars};
+
+  #[test]
+  fn truncate_chars_borrows_when_short_enough() {
+    let s = "hello";
+    let out = truncate_chars(s, 10);
+    assert_eq!(out, "hello");
+    // Should be a Borrowed variant — no allocation.
+    assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+  }
+
+  #[test]
+  fn truncate_chars_caps_long_ascii() {
+    let s = "abcdefghij";
+    let out = truncate_chars(s, 5);
+    assert_eq!(out, "abcde");
+    assert!(matches!(out, std::borrow::Cow::Owned(_)));
+  }
+
+  #[test]
+  fn truncate_chars_does_not_panic_on_emoji_boundary() {
+    // 🚀 is 4 bytes (U+1F680). Byte-slicing `&s[..3]` would panic mid-emoji.
+    let s = "abc🚀def";
+    let out = truncate_chars(s, 3);
+    assert_eq!(out, "abc");
+  }
+
+  #[test]
+  fn truncate_chars_does_not_panic_on_emdash() {
+    // — is 3 bytes (U+2014). Byte-slicing `&s[..2]` would panic mid-emdash.
+    let s = "a\u{2014}b\u{2014}c";
+    let out = truncate_chars(s, 2);
+    assert_eq!(out, "a\u{2014}");
+  }
+
+  #[test]
+  fn truncate_chars_handles_zero_max() {
+    assert_eq!(truncate_chars("anything", 0), "");
+    assert_eq!(truncate_chars("", 0), "");
+  }
+
+  #[test]
+  fn truncate_chars_empty_input() {
+    let out = truncate_chars("", 100);
+    assert_eq!(out, "");
+    assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+  }
+
+  #[test]
+  fn truncate_chars_idempotent() {
+    let s = "café — naïve résumé";
+    let once = truncate_chars(s, 10).into_owned();
+    let twice = truncate_chars(&once, 10).into_owned();
+    assert_eq!(once, twice);
+  }
+
 
   #[test]
   fn passes_through_plain_ascii() {
