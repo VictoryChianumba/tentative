@@ -77,6 +77,33 @@ pub struct ChatUi {
   pub streaming_words: std::collections::VecDeque<String>,
   /// True while word-by-word reveal is in progress.
   pub is_streaming: bool,
+
+  /// Cached wrapped + styled lines per message.
+  ///
+  /// Key: `(msg_idx, content_len, has_streaming_cursor)`. `content_len`
+  /// catches every streaming append (each word reveal grows the last
+  /// message by `word.len() + 1`); `has_streaming_cursor` differentiates
+  /// "this message is the streaming target right now" from "this message
+  /// was the last message but is no longer streaming". Together they form
+  /// a content-derived cache key so older messages stay cached across
+  /// streaming ticks while only the streaming message re-wraps.
+  ///
+  /// Cleared when `terminal width` changes (resize) or when the active
+  /// session changes (different conversation entirely).
+  ///
+  /// Closes Perf HIGH #14: previously `build_message_lines` re-wrapped
+  /// every visible message via `textwrap::wrap` on every redraw, which is
+  /// the dominant per-frame cost during streaming reveals.
+  line_cache: std::collections::HashMap<
+    (usize, usize, bool),
+    Vec<ratatui::text::Line<'static>>,
+  >,
+  /// Width the cache was built for. Diverges from current width on resize;
+  /// triggers a full cache clear.
+  line_cache_width: usize,
+  /// Session id the cache was built for. Diverges on session switch;
+  /// triggers a full cache clear.
+  line_cache_session_id: Option<String>,
   /// Vim-style input mode for the chat pane.
   pub input_mode: ChatInputMode,
   /// Selected row in the slash-command suggestion palette.
@@ -117,6 +144,9 @@ impl ChatUi {
       frame_count: 0,
       streaming_words: std::collections::VecDeque::new(),
       is_streaming: false,
+      line_cache: std::collections::HashMap::new(),
+      line_cache_width: 0,
+      line_cache_session_id: None,
       input_mode: ChatInputMode::Insert,
       slash_selected: 0,
       slash_scroll: 0,
@@ -1142,44 +1172,88 @@ impl ChatUi {
   /// User messages: full-width background highlight, white text.
   /// Assistant messages: no background, gray text, markdown bold handled.
   /// Single blank line between each pair.
-  fn build_message_lines(&self, width: usize, t: &Theme) -> Vec<Line<'static>> {
+  ///
+  /// Per-message lines are cached on `self.line_cache` so streaming reveals
+  /// only re-wrap the streaming message instead of the entire history (see
+  /// the field doc for the cache invalidation strategy).
+  fn build_message_lines(
+    &mut self,
+    width: usize,
+    t: &Theme,
+  ) -> Vec<Line<'static>> {
+    // Invalidate the entire cache on width change (resize) or session
+    // switch — every cached entry's wrap was relative to the old width or
+    // the old conversation.
+    let session_id = self.active_session.as_ref().map(|s| s.id.clone());
+    if width != self.line_cache_width || session_id != self.line_cache_session_id
+    {
+      self.line_cache.clear();
+      self.line_cache_width = width;
+      self.line_cache_session_id = session_id;
+    }
+
     let session = match &self.active_session {
       Some(s) => s,
       None => return vec![],
     };
 
     let wrap_width = width.max(1);
-    let msgs: Vec<&ChatMessage> = session
+    // Collect msg metadata up front so we can release the borrow on
+    // self.active_session before we mutate self.line_cache below.
+    let msgs: Vec<(Role, String, usize)> = session
       .messages
       .iter()
       .filter(|m| !matches!(m.role, Role::System))
+      .map(|m| (m.role, m.content.clone(), m.content.len()))
       .collect();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let total_msgs = msgs.len();
 
-    for (i, msg) in msgs.iter().enumerate() {
-      match msg.role {
+    for (i, (role, content, content_len)) in msgs.iter().enumerate() {
+      let role = *role;
+      let content_len = *content_len;
+      let is_last = i + 1 == total_msgs;
+      let has_streaming_cursor =
+        self.is_streaming && is_last && matches!(role, Role::Assistant);
+      let key = (i, content_len, has_streaming_cursor);
+
+      // Cache hit: clone the cached lines into the output. Cloning a
+      // Vec<Line<'static>> is O(N_lines × N_spans × String::clone) but
+      // skips the dominant `textwrap::wrap` cost over the message body.
+      if let Some(cached) = self.line_cache.get(&key) {
+        lines.extend(cached.iter().cloned());
+        if i + 1 < total_msgs {
+          lines.push(Line::from(""));
+        }
+        continue;
+      }
+
+      // Cache miss: compute the per-message lines into a temporary, store
+      // them in the cache, then extend the output.
+      let mut msg_lines: Vec<Line<'static>> = Vec::new();
+      match role {
         Role::System => continue,
 
         Role::User => {
           let text_style = Style::default().fg(t.text).bg(t.bg_user_msg);
           let stripe_style = Style::default().fg(t.accent).bg(t.bg_user_msg);
           let indent_style = Style::default().fg(t.text_dim).bg(t.bg_user_msg);
-          let content = if msg.content.is_empty() {
+          let display_content = if content.is_empty() {
             " ".to_string()
           } else {
-            crate::sanitize::sanitize_terminal_text(&msg.content)
+            crate::sanitize::sanitize_terminal_text(content)
           };
           let inner_width = wrap_width.saturating_sub(2).max(1);
           let mut msg_first = true;
-          for source_line in content.lines() {
+          for source_line in display_content.lines() {
             if source_line.is_empty() {
               let stripe = if msg_first {
                 Span::styled("▌ ", stripe_style)
               } else {
                 Span::styled("  ", indent_style)
               };
-              lines.push(Line::from(vec![
+              msg_lines.push(Line::from(vec![
                 stripe,
                 Span::styled(" ".repeat(inner_width), text_style),
               ]));
@@ -1191,7 +1265,7 @@ impl ChatUi {
                 } else {
                   Span::styled("  ", indent_style)
                 };
-                lines.push(Line::from(vec![
+                msg_lines.push(Line::from(vec![
                   stripe,
                   Span::styled(wrapped.to_string(), text_style),
                 ]));
@@ -1203,47 +1277,45 @@ impl ChatUi {
 
         Role::Assistant => {
           let base_style = Style::default().fg(t.text);
-          // Sanitize the assistant's content before doing anything else with
-          // it: terminal-escape sequences in a streamed response (whether
-          // adversarial or just an artifact of model-generated text) must
-          // never reach the renderer.
-          let safe_content = crate::sanitize::sanitize_terminal_text(&msg.content);
-          // Show streaming cursor on the last message while streaming.
-          let is_last = i + 1 == msgs.len();
-          let display_content = if self.is_streaming && is_last {
+          // Sanitize the assistant's content before doing anything else
+          // with it: terminal-escape sequences in a streamed response
+          // (whether adversarial or just an artifact of model-generated
+          // text) must never reach the renderer.
+          let safe_content = crate::sanitize::sanitize_terminal_text(content);
+          let display_content = if has_streaming_cursor {
             format!("{safe_content}█")
           } else {
             safe_content
           };
 
-          let content = if display_content.is_empty() {
+          let display_content = if display_content.is_empty() {
             " ".to_string()
           } else {
             display_content
           };
 
-          for source_line in content.lines() {
+          for source_line in display_content.lines() {
             if source_line.trim().is_empty() {
-              lines.push(Line::from(""));
+              msg_lines.push(Line::from(""));
             } else if let Some(rest) = source_line.strip_prefix("## ") {
               // Blank line before H2 to open up sections visually.
-              if lines.last().map_or(false, |l| {
+              if msg_lines.last().map_or(false, |l| {
                 l.spans.iter().any(|s| !s.content.trim().is_empty())
               }) {
-                lines.push(Line::from(""));
+                msg_lines.push(Line::from(""));
               }
               // H2 — accent color + bold, no indent
               let h_style = Style::default()
                 .fg(t.accent)
                 .add_modifier(Modifier::BOLD);
               for wrapped in textwrap::wrap(rest, wrap_width) {
-                lines.push(parse_markdown_inline(&wrapped, h_style));
+                msg_lines.push(parse_markdown_inline(&wrapped, h_style));
               }
             } else if let Some(rest) = source_line.strip_prefix("### ") {
               // H3 — bold, no indent
               let h_style = base_style.add_modifier(Modifier::BOLD);
               for wrapped in textwrap::wrap(rest, wrap_width) {
-                lines.push(parse_markdown_inline(&wrapped, h_style));
+                msg_lines.push(parse_markdown_inline(&wrapped, h_style));
               }
             } else if let Some(rest) = source_line
               .strip_prefix("- ")
@@ -1259,13 +1331,13 @@ impl ChatUi {
                     Span::styled("  • ".to_string(), marker_style),
                   ];
                   spans.extend(parse_markdown_inline(&wrapped, base_style).spans);
-                  lines.push(Line::from(spans));
+                  msg_lines.push(Line::from(spans));
                   first = false;
                 } else {
                   let mut spans =
                     vec![Span::styled("    ".to_string(), base_style)];
                   spans.extend(parse_markdown_inline(&wrapped, base_style).spans);
-                  lines.push(Line::from(spans));
+                  msg_lines.push(Line::from(spans));
                 }
               }
             } else if let Some((num, rest)) = parse_numbered_item(source_line) {
@@ -1280,27 +1352,33 @@ impl ChatUi {
                   let mut spans =
                     vec![Span::styled(format!("  {prefix}"), num_style)];
                   spans.extend(parse_markdown_inline(&wrapped, base_style).spans);
-                  lines.push(Line::from(spans));
+                  msg_lines.push(Line::from(spans));
                   first = false;
                 } else {
                   let mut spans =
                     vec![Span::styled(pad.to_string(), base_style)];
                   spans.extend(parse_markdown_inline(&wrapped, base_style).spans);
-                  lines.push(Line::from(spans));
+                  msg_lines.push(Line::from(spans));
                 }
               }
             } else {
               // Plain prose — wrap at full width
               for wrapped in textwrap::wrap(source_line, wrap_width) {
-                lines.push(parse_markdown_inline(&wrapped, base_style));
+                msg_lines.push(parse_markdown_inline(&wrapped, base_style));
               }
             }
           }
         }
       }
 
+      // Cache the freshly-built per-message lines, then extend the output.
+      // Cloning into the cache is cheap relative to the textwrap::wrap
+      // cost we just paid; subsequent reads only pay the clone.
+      self.line_cache.insert(key, msg_lines.clone());
+      lines.extend(msg_lines);
+
       // Single blank line between messages, not after the last.
-      if i + 1 < msgs.len() {
+      if i + 1 < total_msgs {
         lines.push(Line::from(""));
       }
     }
