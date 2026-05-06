@@ -84,7 +84,6 @@ impl Editor {
       editor_state: EditorState::new(),
       document_hash,
       total_lines,
-      progress_display_until: None,
       show_progress: false,
       cursor_x: 0,
       cursor_y: height / 2,
@@ -193,13 +192,6 @@ impl Editor {
 
   pub fn debug_log_error(&self, error: &str) {
     crate::debug::debug_log_error("editor", error);
-  }
-
-  // Calculate dimensions for display
-  #[allow(dead_code)]
-  pub fn calculate_dimensions(&self) -> usize {
-    // Always use full height minus status line
-    self.height.saturating_sub(1)
   }
 
   // Helper methods to access active buffer's mode and command state

@@ -19,8 +19,6 @@ pub struct Editor {
   pub editor_state: EditorState,
   pub document_hash: u64,
   pub total_lines: usize,
-  #[allow(dead_code)]
-  pub progress_display_until: Option<Instant>,
   pub show_progress: bool,
   pub cursor_x: usize,
   pub cursor_y: usize,

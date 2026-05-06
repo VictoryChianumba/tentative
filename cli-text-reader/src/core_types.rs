@@ -91,8 +91,6 @@ pub struct EditorState {
   pub command_cursor_pos: usize, /* DEPRECATED: Use active buffer's
                          * command_cursor_pos */
   pub search_query: String, // DEPRECATED: Use active buffer's search_query
-  #[allow(dead_code)]
-  pub last_search_index: Option<usize>,
   pub current_match: Option<(usize, usize, usize)>, /* DEPRECATED: Use
                                                      * active buffer's
                                                      * current_match */
@@ -125,7 +123,6 @@ impl EditorState {
       command_buffer: String::new(),
       command_cursor_pos: 0,
       search_query: String::new(),
-      last_search_index: None,
       current_match: None,
       selection_start: None,
       selection_end: None,
