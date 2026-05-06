@@ -1244,21 +1244,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           match result {
             Ok(lines) => {
               log::debug!("reader_open: {} lines", lines.len());
-              // Trench's fulltext fetch worker hands us pre-extracted
-              // plain-text lines (PDF / EPUB / HTML).  Wrap as a tread
-              // PaperData with one Block::Line per line; arxiv_id is
-              // None because we don't yet route arxiv content through
-              // tread's `fetch_paper`.  Initial dimensions are a guess;
-              // tread reflows on the first resize.  kitty_supported =
-              // false because plain text has no images to render.
-              let paper = tread::PaperData::from_plain_lines(lines);
+              // arXiv detection: if the queued paper's URL is arxiv,
+              // discard the pre-extracted plain text and re-fetch via
+              // tread's LaTeX-source pipeline so math, tables, figures,
+              // and headers all render.  ~2s blocking call (network
+              // round-trip) — acceptable for v1; future iteration can
+              // background this on a worker thread.  Non-arxiv content
+              // continues through the plain-text path.
+              let paper_ref = app.pending_fulltext_paper.take();
+              let title = app.last_read.clone().unwrap_or_default();
+              let detected_arxiv_id = paper_ref
+                .as_ref()
+                .and_then(|p| tread::extract_arxiv_id(&p.url));
+              let kitty_supported = detected_arxiv_id.is_some();
+              let (arxiv_id, paper) = if let Some(id) = detected_arxiv_id {
+                match tread::fetch_paper(&id, kitty_supported) {
+                  Ok(p) => (Some(id), p),
+                  Err(e) => {
+                    log::warn!(
+                      "tread::fetch_paper failed for {id}, falling back to plain text: {e}"
+                    );
+                    (
+                      paper_ref.as_ref().map(|p| p.id.clone()),
+                      tread::PaperData::from_plain_lines(lines),
+                    )
+                  }
+                }
+              } else {
+                (
+                  paper_ref.as_ref().map(|p| p.id.clone()),
+                  tread::PaperData::from_plain_lines(lines),
+                )
+              };
               let reader = tread::Reader::init(
-                paper, None, None, 80, 24, false,
+                paper, None, arxiv_id.clone(), 80, 24, kitty_supported,
                 Some(app.voice_controller.clone()),
               );
-              let title = app.last_read.clone().unwrap_or_default();
-              let paper_ref = app.pending_fulltext_paper.take();
-              let arxiv_id = paper_ref.as_ref().map(|paper| paper.id.clone());
               if app.fulltext_for_secondary {
                 if app.fulltext_new_tab {
                   app.reader_secondary_push_tab(

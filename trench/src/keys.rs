@@ -105,6 +105,30 @@ pub fn dispatch(key: KeyEvent, app: &mut App) {
   if handle_help_overlay(key, app) {
     return;
   }
+  // `?` shows tread's reader-help overlay when a reader pane is focused
+  // — vim-style key reference for the embedded reader.  Otherwise fall
+  // through to trench's app-level help (Sections / Navigation / etc.).
+  if key.code == KeyCode::Char('?')
+    && !is_text_entry_context(app)
+    && reader_pane_focused(app)
+  {
+    let reader_action = if app.reader_popup_active {
+      app
+        .reader_popup_editor
+        .as_mut()
+        .map(|r| r.handle_event(Event::Key(key)))
+    } else if app.focused_pane == PaneId::SecondaryReader {
+      app
+        .reader_secondary_editor_mut()
+        .map(|r| r.handle_event(Event::Key(key)))
+    } else {
+      app
+        .reader_editor_mut()
+        .map(|r| r.handle_event(Event::Key(key)))
+    };
+    drop(reader_action);
+    return;
+  }
   if key.code == KeyCode::Char('?') && !is_text_entry_context(app) {
     app.leader_active = false;
     app.help_active = true;
@@ -142,6 +166,18 @@ pub fn dispatch(key: KeyEvent, app: &mut App) {
     return;
   }
   handle_feed_view(key, app);
+}
+
+/// True when one of the embedded reader panes is currently focused.
+/// Used to decide whether `?` should show tread's reader-help overlay
+/// (focused) or trench's app-level help (otherwise).  Includes the
+/// floating popup reader since it's the only thing on screen when active.
+fn reader_pane_focused(app: &App) -> bool {
+  if app.reader_popup_active {
+    return true;
+  }
+  matches!(app.focused_pane, PaneId::Reader | PaneId::SecondaryReader)
+    && app.reader_active
 }
 
 fn is_text_entry_context(app: &App) -> bool {
