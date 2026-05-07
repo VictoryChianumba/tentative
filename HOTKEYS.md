@@ -143,7 +143,7 @@ multi-toggle).
 | `q` / `Esc` | Close reader or step back reader/feed state |
 | `Tab` | Switch primary / secondary reader pane |
 | `Ldr+f` | Cycle reader feed / feed drawer layout |
-| `Ldr+n` | Toggle reader notes dock |
+| `Ldr+n` | Open notes for the current reader paper |
 | `Ldr+t` | Open in new tab (prompts target pane if dual reader active) |
 | `Ldr+[` / `Ldr+]` | Previous / next reader tab |
 | `Ldr+w` | Close current reader tab |
@@ -174,6 +174,28 @@ multi-toggle).
 
 ---
 
+## Notes
+
+| Key | Action |
+|---|---|
+| `Ldr+n` | Open notes from current context, or hide the currently focused notes pane |
+| `[` / `]` | Cycle notes mode backward / forward (`Paper Notes` / `Library` / `Capture`) |
+| `j` / `k` or `↓`/`↑` | Move note selection in the Trench notes browser |
+| `g` / `G` | Jump to first / last note |
+| `PageUp` / `PageDown` | Move note selection by page |
+| `n` / `Enter` | In `Capture`, open the prefilled linked-note composer |
+| `Enter` | In `Library` / `Paper Notes`, edit the selected note |
+| `a` | Attach the current paper context to the active note |
+| `x` | Detach the current paper context from the active note |
+| `Ldr+[` / `Ldr+]` | Previous / next note tab |
+| `Ldr+w` | Close active note tab |
+| `Esc` | Back out of preview/editor/popups, then close the notes pane |
+
+Notes browser rendering is Trench-owned in v1; `crates/notes` still owns the
+editor and note popups.
+
+---
+
 ## Settings (Ldr+s)
 
 | Key | Action |
@@ -200,14 +222,17 @@ multi-toggle).
 
 | Key | Action |
 |---|---|
-| `j` / `k` | Navigate file tree |
+| `j` / `k` | Move in the tree or scroll the preview |
 | `Enter` | Open file or folder |
 | `b` / `Backspace` | Go back |
-| `Tab` | Switch tree / content pane |
-| `h` / `l` | Scroll content left / right |
+| `Tab` / `Shift+Tab` | Switch tree / content pane |
+| `h` / `l` | Pan preview left / right |
 | `+` / `=` / `-` | Zoom in / out |
-| `y` | Copy file path |
+| `o` | Open the current GitHub repo / path / file URL in the browser |
+| `y` | Copy the current repository path |
+| `u` | Copy the current GitHub URL |
 | `d` | Download file |
+| `Esc` | Step back to the tree pane, then close the viewer |
 | `q` | Close viewer |
 
 ---

@@ -758,6 +758,14 @@ impl App {
     self.draw_popup(frame, area);
   }
 
+  pub fn draw_editor_surface(&mut self, frame: &mut Frame, area: Rect) {
+    self.editor.render_widget(frame, area);
+  }
+
+  pub fn draw_popup_overlay(&mut self, frame: &mut Frame, area: Rect) {
+    self.draw_popup(frame, area);
+  }
+
   fn draw_preview(&self, frame: &mut Frame, area: Rect, note: &Note) {
     let para = Paragraph::new(Text::raw(note.content.clone()))
       .block(

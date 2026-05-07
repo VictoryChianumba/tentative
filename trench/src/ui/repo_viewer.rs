@@ -1,6 +1,6 @@
 use ratatui::{
   Frame,
-  layout::{Constraint, Direction, Layout, Rect},
+  layout::{Alignment, Constraint, Direction, Layout, Rect},
   style::{Color, Modifier, Style},
   text::{Line, Span},
   widgets::{Block, Borders, Paragraph},
@@ -8,63 +8,88 @@ use ratatui::{
 
 use crate::app::{App, RepoFileKind, RepoPane};
 use crate::github::NodeType;
-use ui_theme::Theme;
 use crate::ui::repo_markdown;
+use ui_theme::Theme;
 
 pub fn draw_repo_viewer(frame: &mut Frame, app: &mut App) {
   let area = frame.area();
-
   let rows = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
-      Constraint::Length(2), // quiet header + separator
-      Constraint::Min(0),    // tree + file
-      Constraint::Length(1), // help bar
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Min(0),
+      Constraint::Length(1),
     ])
     .split(area);
 
   let t = app.theme();
-  draw_header(frame, app, rows[0], &t);
-  draw_main(frame, app, rows[1], &t);
-  draw_help(frame, app, rows[2], &t);
+  draw_workspace_rule(frame, rows[0], "Repository", &t);
+  draw_summary_row(frame, app, rows[1], &t);
+  draw_context_row(frame, app, rows[2], &t);
+  draw_main(frame, app, rows[3], &t);
+  draw_help(frame, app, rows[4], &t);
 }
 
-// ── Header ───────────────────────────────────────────────────────────────────
+fn draw_workspace_rule(
+  frame: &mut Frame,
+  area: Rect,
+  title: &str,
+  t: &Theme,
+) {
+  let width = area.width as usize;
+  let style = t.style_border();
+  let title_style = t.style_header().add_modifier(Modifier::BOLD);
+  let left = "── ";
+  let right = " ";
+  let fill =
+    "─".repeat(width.saturating_sub(left.len() + title.len() + right.len()));
+  let line = Line::from(vec![
+    Span::styled(left, style),
+    Span::styled(title.to_string(), title_style),
+    Span::styled(format!("{right}{fill}"), style),
+  ]);
+  frame.render_widget(Paragraph::new(line), area);
+}
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect, t: &Theme) {
-  let ctx = match &app.repo_context {
-    Some(c) => c,
-    None => return,
+fn draw_summary_row(frame: &mut Frame, app: &App, area: Rect, t: &Theme) {
+  let Some(ctx) = app.repo_context.as_ref() else {
+    return;
   };
 
-  let rows = Layout::default()
-    .direction(Direction::Vertical)
-    .constraints([Constraint::Length(1), Constraint::Length(1)])
-    .split(area);
-
   let repo = format!("github.com/{}/{}", ctx.owner, ctx.repo_name);
-  let branch = (!ctx.default_branch.is_empty())
-    .then(|| format!("  [{}]", ctx.default_branch))
-    .unwrap_or_default();
-  let width = rows[0].width as usize;
-  let header = Line::from(vec![
-    Span::raw(" "),
-    Span::styled(
-      truncate(&repo, width.saturating_sub(branch.len() + 1)),
-      t.style_accent(),
-    ),
-    Span::styled(branch, t.style_dim()),
-  ]);
-  frame.render_widget(Paragraph::new(header), rows[0]);
+  let branch = if ctx.default_branch.is_empty() {
+    "unknown".to_string()
+  } else {
+    ctx.default_branch.clone()
+  };
+  let status = app
+    .repo_status_label()
+    .unwrap_or_else(|| "ready".to_string());
 
-  let sep = "─".repeat(area.width as usize);
-  frame.render_widget(
-    Paragraph::new(Span::styled(sep, t.style_border())),
-    rows[1],
-  );
+  let line = Line::from(vec![
+    Span::styled("  ", t.style_dim()),
+    Span::styled(repo, t.style_accent().add_modifier(Modifier::BOLD)),
+    Span::styled("  ·  ", t.style_dim()),
+    Span::styled(format!("branch {branch}"), t.style_dim()),
+    Span::styled("  ·  ", t.style_dim()),
+    Span::styled(status.clone(), repo_status_style(&status, t)),
+  ]);
+  frame.render_widget(Paragraph::new(line), area);
 }
 
-// ── Main (tree + file) ───────────────────────────────────────────────────────
+fn draw_context_row(frame: &mut Frame, app: &App, area: Rect, t: &Theme) {
+  let Some(ctx) = app.repo_context.as_ref() else {
+    return;
+  };
+
+  let line = Line::from(Span::styled(
+    format!("  {}", repo_context_description(ctx)),
+    t.style_dim(),
+  ));
+  frame.render_widget(Paragraph::new(line), area);
+}
 
 fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, t: &Theme) {
   let ctx = match app.repo_context.as_mut() {
@@ -73,50 +98,40 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, t: &Theme) {
   };
 
   if ctx.no_token {
-    let msg = Paragraph::new(vec![
-      Line::from(""),
-      Line::from(Span::styled(
-        "  GitHub token required.",
-        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
-      )),
-      Line::from(""),
-      Line::from(Span::styled(
-        "  Set github_token in ~/.config/trench/config.json",
-        t.style_dim(),
-      )),
-      Line::from(""),
-      Line::from(Span::styled(
-        "  Example:  { \"github_token\": \"ghp_...\" }",
-        t.style_dim(),
-      )),
-    ])
-    .block(
-      Block::default()
-        .borders(Borders::ALL)
-        .border_style(t.style_border()),
+    draw_repo_shell_box(frame, area, "Access", false, t);
+    let inner = inset(area);
+    render_center_state(
+      frame,
+      inner,
+      "GitHub token required",
+      &[
+        "Set github_token in ~/.config/trench/config.json",
+        "o opens the repository in the browser",
+      ],
+      t,
     );
-    frame.render_widget(msg, area);
     return;
   }
 
-  let tree_w = (area.width / 3).max(24).min(48);
+  let tree_w = (area.width / 3).max(26).min(52);
   let tree_title = if ctx.tree_path.is_empty() {
-    "/".to_string()
+    "Tree · /".to_string()
   } else {
-    format!("/{}/", ctx.tree_path)
+    format!("Tree · /{}", ctx.tree_path)
   };
-  let file_title = ctx
-    .file_name
-    .as_deref()
-    .map(|n| format!(" {n} "))
-    .unwrap_or_else(|| " (no file open) ".to_string());
+  let preview_title = if let Some(name) = ctx.file_name.as_deref() {
+    format!("Preview · {} · {}", name, repo_kind_label(ctx.file_kind))
+  } else {
+    "Preview".to_string()
+  };
+
   let (tree_rect, file_rect) = draw_repo_split_box(
     frame,
     area,
     tree_w,
     &tree_title,
     ctx.pane_focus == RepoPane::Tree,
-    &file_title,
+    &preview_title,
     ctx.pane_focus == RepoPane::File,
     t,
   );
@@ -125,71 +140,99 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, t: &Theme) {
   draw_file_pane(frame, ctx, file_rect, t);
 }
 
-// ── Tree pane ────────────────────────────────────────────────────────────────
-
 fn draw_tree_pane(
   frame: &mut Frame,
   ctx: &crate::app::RepoContext,
   area: Rect,
   t: &Theme,
 ) {
-  // Show status message inline in the tree pane.
-  if let Some(ref msg) = ctx.status_message {
-    let p = Paragraph::new(Span::styled(
-      truncate(msg, area.width as usize),
-      Style::default().fg(t.warning),
-    ));
-    frame.render_widget(p, area);
+  if area.width == 0 || area.height == 0 {
     return;
   }
 
   if ctx.tree_nodes.is_empty() {
-    let p = Paragraph::new("  (empty)").style(t.style_dim());
-    frame.render_widget(p, area);
+    let status = ctx.status_message.as_deref().unwrap_or("Repository is empty");
+    let title = if status.starts_with("Error:") {
+      "Could not load repository tree"
+    } else if status.contains("Loading") {
+      "Loading repository tree"
+    } else {
+      "No tree entries"
+    };
+    render_center_state(frame, area, title, &[status], t);
     return;
   }
 
   let visible_h = area.height as usize;
-  let scroll = if ctx.tree_cursor >= visible_h {
-    ctx.tree_cursor - visible_h + 1
+  let scroll = if ctx.tree_cursor >= visible_h.saturating_sub(2) {
+    ctx.tree_cursor + 2 - visible_h
   } else {
     0
   };
-  let max_name = area.width.saturating_sub(3) as usize;
+  let max_name = area.width.saturating_sub(4) as usize;
 
-  let lines: Vec<Line> = ctx
+  let mut y = area.y;
+  for (i, node) in ctx
     .tree_nodes
     .iter()
     .enumerate()
     .skip(scroll)
     .take(visible_h)
-    .map(|(i, node)| {
-      let icon = match node.node_type {
-        NodeType::Dir => "▸ ",
-        NodeType::File => "  ",
-      };
-      let text = format!("{}{}", icon, truncate(&node.name, max_name));
-
-      if i == ctx.tree_cursor {
-        Line::from(Span::styled(
-          text,
-          t.style_selection_text(),
-        ))
-      } else {
-        let col = match node.node_type {
-          NodeType::Dir => t.accent,
-          NodeType::File => t.text,
-        };
-        Line::from(Span::styled(text, Style::default().fg(col)))
-      }
-    })
-    .collect();
-
-  let p = Paragraph::new(lines);
-  frame.render_widget(p, area);
+  {
+    let is_selected = i == ctx.tree_cursor;
+    let (icon, icon_style, name_style) = match node.node_type {
+      NodeType::Dir => (
+        "▸",
+        if is_selected {
+          t.style_selection_text()
+        } else {
+          Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
+        },
+        if is_selected {
+          t.style_selection_text().add_modifier(Modifier::BOLD)
+        } else {
+          Style::default().fg(t.header).add_modifier(Modifier::BOLD)
+        },
+      ),
+      NodeType::File => (
+        "·",
+        if is_selected {
+          t.style_selection_text()
+        } else {
+          Style::default().fg(t.text_dim)
+        },
+        if is_selected {
+          t.style_selection_text()
+        } else {
+          Style::default().fg(t.text)
+        },
+      ),
+    };
+    let name = truncate(&node.name, max_name.saturating_sub(1));
+    let line = Line::from(vec![
+      Span::styled(
+        if is_selected { "› " } else { "  " },
+        if is_selected {
+          t.style_selection_text()
+        } else {
+          t.style_dim()
+        },
+      ),
+      Span::styled(format!("{icon} "), icon_style),
+      Span::styled(name, name_style),
+    ]);
+    let row_rect = Rect::new(area.x, y, area.width, 1);
+    if is_selected {
+      frame.render_widget(Paragraph::new(line).style(t.style_selection()), row_rect);
+    } else {
+      frame.render_widget(Paragraph::new(line), row_rect);
+    }
+    y += 1;
+    if y >= area.y + area.height {
+      break;
+    }
+  }
 }
-
-// ── File pane ────────────────────────────────────────────────────────────────
 
 fn draw_file_pane(
   frame: &mut Frame,
@@ -197,11 +240,30 @@ fn draw_file_pane(
   area: Rect,
   t: &Theme,
 ) {
+  if area.width == 0 || area.height == 0 {
+    return;
+  }
+
   if ctx.file_lines.is_empty() {
-    let p =
-      Paragraph::new("  Navigate the tree and press enter to open a file.")
-        .style(t.style_dim());
-    frame.render_widget(p, area);
+    if let Some(status) = ctx.status_message.as_deref() {
+      if status.starts_with("Error:") || status.contains("Loading") {
+        let title = if status.starts_with("Error:") {
+          "Could not load file"
+        } else {
+          "Loading file"
+        };
+        render_center_state(frame, area, title, &[status], t);
+        return;
+      }
+    }
+
+    render_center_state(
+      frame,
+      area,
+      "No file open",
+      &["Press Enter to open the selected file."],
+      t,
+    );
     return;
   }
 
@@ -230,7 +292,6 @@ fn draw_file_pane(
       .collect();
     frame.render_widget(Paragraph::new(lines), area);
   } else if !ctx.file_highlighted.is_empty() {
-    // Syntax-highlighted code.
     let total_lines = ctx.file_lines.len();
     let line_num_w = format!("{total_lines}").len();
 
@@ -246,9 +307,8 @@ fn draw_file_pane(
           t.style_dim(),
         )];
         let content: String =
-          spans.iter().map(|(_, _, _, t)| t.as_str()).collect();
+          spans.iter().map(|(_, _, _, text)| text.as_str()).collect();
         let content_sliced = apply_h_offset(&content, h_off, render_w);
-        // Re-apply colours by slicing character ranges.
         let mut col_offset = 0usize;
         for (r, g, b, text) in spans {
           let start = col_offset;
@@ -275,7 +335,6 @@ fn draw_file_pane(
 
     frame.render_widget(Paragraph::new(lines), area);
   } else {
-    // Plain text.
     let total_lines = ctx.file_lines.len();
     let line_num_w = format!("{total_lines}").len();
 
@@ -324,27 +383,16 @@ fn draw_repo_split_box(
   file_focused: bool,
   t: &Theme,
 ) -> (Rect, Rect) {
-  let border_style = t.style_border();
+  draw_repo_shell_box(frame, area, "", false, t);
 
-  frame.render_widget(
-    Block::default().borders(Borders::ALL).border_style(border_style),
-    area,
-  );
-
-  let inner = Rect {
-    x: area.x + 1,
-    y: area.y + 1,
-    width: area.width.saturating_sub(2),
-    height: area.height.saturating_sub(2),
-  };
-
+  let inner = inset(area);
   let tree_w = tree_w.min(inner.width.saturating_sub(2));
   let file_w = inner.width.saturating_sub(tree_w + 1);
   let div_x = inner.x + tree_w;
 
   if inner.height > 0 {
     let divider: Vec<Line> = (0..inner.height)
-      .map(|_| Line::from(Span::styled("│", border_style)))
+      .map(|_| Line::from(Span::styled("│", t.style_border())))
       .collect();
     frame.render_widget(
       Paragraph::new(divider),
@@ -352,19 +400,20 @@ fn draw_repo_split_box(
     );
   }
 
-  frame.render_widget(
-    Paragraph::new(Span::styled("┬", border_style)),
-    Rect { x: div_x, y: area.y, width: 1, height: 1 },
+  draw_pane_rule(
+    frame,
+    Rect::new(area.x + 1, area.y, tree_w, 1),
+    tree_title,
+    tree_focused,
+    t,
   );
-  if area.height > 1 {
-    frame.render_widget(
-      Paragraph::new(Span::styled("┴", border_style)),
-      Rect { x: div_x, y: area.y + area.height - 1, width: 1, height: 1 },
-    );
-  }
-
-  draw_split_title(frame, area.x + 1, area.y, tree_w, tree_title, tree_focused, t);
-  draw_split_title(frame, div_x + 1, area.y, file_w, file_title, file_focused, t);
+  draw_pane_rule(
+    frame,
+    Rect::new(div_x + 1, area.y, file_w, 1),
+    file_title,
+    file_focused,
+    t,
+  );
 
   let tree_rect =
     Rect { x: inner.x, y: inner.y, width: tree_w, height: inner.height };
@@ -381,25 +430,71 @@ fn draw_repo_split_box(
   (tree_rect, file_rect)
 }
 
-fn draw_split_title(
+fn draw_repo_shell_box(
   frame: &mut Frame,
-  x: u16,
-  y: u16,
-  width: u16,
+  area: Rect,
   title: &str,
   focused: bool,
   t: &Theme,
 ) {
-  if width == 0 {
+  let border_style = if focused {
+    t.style_border_active()
+  } else {
+    t.style_border()
+  };
+
+  let block = if title.is_empty() {
+    Block::default().borders(Borders::ALL).border_style(border_style)
+  } else {
+    Block::default()
+      .borders(Borders::ALL)
+      .border_style(border_style)
+      .title(title)
+  };
+  frame.render_widget(block, area);
+}
+
+fn inset(area: Rect) -> Rect {
+  Rect {
+    x: area.x.saturating_add(1),
+    y: area.y.saturating_add(1),
+    width: area.width.saturating_sub(2),
+    height: area.height.saturating_sub(2),
+  }
+}
+
+fn draw_pane_rule(
+  frame: &mut Frame,
+  area: Rect,
+  title: &str,
+  focused: bool,
+  t: &Theme,
+) {
+  if area.width == 0 {
     return;
   }
-
-  let label = format!(" {} ", truncate(title.trim(), width as usize));
-  let style = if focused { t.style_header() } else { t.style_dim() };
-  frame.render_widget(
-    Paragraph::new(Span::styled(truncate(&label, width as usize), style)),
-    Rect { x, y, width, height: 1 },
-  );
+  let style = if focused {
+    t.style_border_active()
+  } else {
+    t.style_border()
+  };
+  let title_style = if focused {
+    t.style_accent().add_modifier(Modifier::BOLD)
+  } else {
+    t.style_header().add_modifier(Modifier::BOLD)
+  };
+  let width = area.width as usize;
+  let label = truncate(title, width.saturating_sub(4));
+  let left = " ";
+  let right = " ";
+  let fill =
+    "─".repeat(width.saturating_sub(left.len() + label.len() + right.len()));
+  let line = Line::from(vec![
+    Span::styled(left, style),
+    Span::styled(label, title_style),
+    Span::styled(format!("{right}{fill}"), style),
+  ]);
+  frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_active_pane_outline(
@@ -433,6 +528,99 @@ fn draw_active_pane_outline(
   );
 }
 
+fn render_center_state(
+  frame: &mut Frame,
+  area: Rect,
+  title: &str,
+  lines: &[&str],
+  t: &Theme,
+) {
+  let mut rendered = Vec::with_capacity(lines.len() + 2);
+  rendered.push(Line::from(""));
+  rendered.push(Line::from(Span::styled(
+    title.to_string(),
+    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+  )));
+  rendered.push(Line::from(""));
+  for line in lines {
+    rendered.push(Line::from(Span::styled(
+      (*line).to_string(),
+      Style::default().fg(t.text_dim),
+    )));
+  }
+  frame.render_widget(
+    Paragraph::new(rendered).alignment(Alignment::Center),
+    area,
+  );
+}
+
+fn repo_context_path(ctx: &crate::app::RepoContext) -> String {
+  match ctx.pane_focus {
+    RepoPane::File => ctx
+      .file_path
+      .clone()
+      .or_else(|| ctx.file_name.clone())
+      .unwrap_or_else(|| "/".to_string()),
+    RepoPane::Tree => ctx
+      .tree_nodes
+      .get(ctx.tree_cursor)
+      .map(|node| node.path.clone())
+      .or_else(|| {
+        if ctx.tree_path.is_empty() {
+          None
+        } else {
+          Some(ctx.tree_path.clone())
+        }
+      })
+      .unwrap_or_else(|| "/".to_string()),
+  }
+}
+
+fn repo_context_description(ctx: &crate::app::RepoContext) -> String {
+  match ctx.pane_focus {
+    RepoPane::Tree => {
+      let selected = ctx
+        .tree_nodes
+        .get(ctx.tree_cursor)
+        .map(|node| node.path.clone())
+        .unwrap_or_else(|| repo_context_path(ctx));
+      "Selected path ".to_string() + &selected + " · tree view"
+    }
+    RepoPane::File => {
+      let selected = ctx
+        .file_path
+        .clone()
+        .or_else(|| ctx.file_name.clone())
+        .unwrap_or_else(|| repo_context_path(ctx));
+      format!(
+        "Selected path {} · {} preview",
+        selected,
+        repo_kind_label(ctx.file_kind)
+      )
+    }
+  }
+}
+
+fn repo_kind_label(kind: RepoFileKind) -> &'static str {
+  match kind {
+    RepoFileKind::Markdown => "markdown",
+    RepoFileKind::Code => "code",
+    RepoFileKind::PlainText => "text",
+  }
+}
+
+fn repo_status_style(status: &str, t: &Theme) -> Style {
+  if status.starts_with("Error:") || status.contains("rejected") {
+    Style::default().fg(t.warning).add_modifier(Modifier::BOLD)
+  } else if status.contains("Loading") {
+    Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
+  } else if status == "ready" {
+    t.style_dim()
+  } else {
+    Style::default().fg(t.text_dim)
+  }
+}
+
 fn prepare_markdown_cache(ctx: &mut crate::app::RepoContext, render_w: usize) {
   let needs_refresh = ctx
     .markdown_cache
@@ -458,9 +646,6 @@ fn prepare_markdown_cache(ctx: &mut crate::app::RepoContext, render_w: usize) {
   }
 }
 
-// ── Horizontal offset helpers ────────────────────────────────────────────────
-
-/// Clip a string to [h_off .. h_off + max_w] in character terms.
 fn apply_h_offset(s: &str, h_off: usize, max_w: usize) -> String {
   if max_w == 0 {
     return String::new();
@@ -468,9 +653,6 @@ fn apply_h_offset(s: &str, h_off: usize, max_w: usize) -> String {
   s.chars().skip(h_off).take(max_w).collect()
 }
 
-/// Given a syntect span that covers [start, end) in `full`, return the visible
-/// portion after applying h_off/render_w. `content_sliced` is precomputed but
-/// we re-derive from `full` for correctness.
 fn slice_char_range(
   _content_sliced: &str,
   full: &str,
@@ -489,53 +671,26 @@ fn slice_char_range(
   full.chars().skip(s).take(e - s).collect()
 }
 
-// ── Help bar ─────────────────────────────────────────────────────────────────
-
 fn draw_help(frame: &mut Frame, app: &App, area: Rect, t: &Theme) {
-  let ctx = match &app.repo_context {
-    Some(c) => c,
-    None => return,
+  let Some(ctx) = app.repo_context.as_ref() else {
+    return;
   };
 
   let help = if ctx.no_token {
-    "q: back".to_string()
+    "repo: o open repo · q/Esc back"
   } else {
     match ctx.pane_focus {
       RepoPane::Tree => {
-        "j/k: navigate  enter: open  b: up  tab: file  y: copy  q: back"
-          .to_string()
+        "repo: j/k move · Enter open · Tab preview · b up · o open · y path · u url · q back"
       }
       RepoPane::File => {
-        let zoom =
-          if ctx.file_kind == RepoFileKind::Markdown && ctx.wrap_width > 0 {
-            format!("  [zoom:{}]", ctx.wrap_width)
-          } else {
-            String::new()
-          };
-        let pan = if ctx.file_kind == RepoFileKind::Markdown
-          && !ctx.markdown_has_pannable_lines
-        {
-          "h/l: pan (code blocks only)"
-        } else {
-          "h/l: pan"
-        };
-        let zoom_hint = if ctx.file_kind == RepoFileKind::Markdown {
-          "+/-: zoom"
-        } else {
-          "+/-: zoom (md only)"
-        };
-        format!(
-          "j/k: scroll  {pan}  {zoom_hint}  tab: tree  y: copy  d: dl  q: back{zoom}",
-        )
+        "repo: j/k scroll · h/l pan · +/- wrap · Tab tree · o open · y path · u url · d download · Esc tree · q back"
       }
     }
   };
 
-  let p = Paragraph::new(help).style(t.style_dim());
-  frame.render_widget(p, area);
+  frame.render_widget(Paragraph::new(help).style(t.style_dim()), area);
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn truncate(s: &str, max_chars: usize) -> String {
   if max_chars == 0 {
