@@ -192,7 +192,7 @@ pub enum FocusedReader {
 pub struct ReaderTab {
   pub title: String,
   pub arxiv_id: Option<String>,
-  pub paper_ref: Option<notes::PaperRef>,
+  pub notes_context: Option<NotesContext>,
   pub reader: tread::Reader,
   pub image_state: tread::ImageState,
 }
@@ -210,6 +210,12 @@ pub enum NotesMode {
   PaperNotes,
   Library,
   Capture,
+}
+
+#[derive(Clone, Debug)]
+pub struct NotesContext {
+  pub paper: notes::PaperRef,
+  pub source_label: String,
 }
 
 impl NotesMode {
@@ -444,12 +450,12 @@ pub struct App {
   pub notes_tabs: Vec<NotesTab>,
   pub notes_active_tab: usize,
   pub notes_mode: NotesMode,
-  pub notes_context_paper: Option<notes::PaperRef>,
+  pub notes_context: Option<NotesContext>,
   pub secondary_notes_active: bool,
   pub secondary_notes_tabs: Vec<NotesTab>,
   pub secondary_notes_active_tab: usize,
   pub secondary_notes_mode: NotesMode,
-  pub secondary_notes_context_paper: Option<notes::PaperRef>,
+  pub secondary_notes_context: Option<NotesContext>,
 
   // Embedded chat pane
   pub chat_ui: Option<chat::ChatUi>,
@@ -464,7 +470,7 @@ pub struct App {
 
   // Floating reader popup (A1 — Ldr+Enter) — not tabbed, separate slot
   pub reader_popup_active: bool,
-  pub reader_popup_rx: Option<Receiver<Result<Vec<String>, String>>>,
+  pub reader_popup_rx: Option<Receiver<Result<tread::PaperData, String>>>,
   pub reader_popup_editor: Option<tread::Reader>,
   /// Image cache for the popup reader.  Mirrors the per-tab field on
   /// `ReaderTab`; needed because tread's image escapes are emitted
@@ -508,9 +514,9 @@ pub struct App {
   pub last_read_source: Option<String>,
 
   // Background fulltext fetch (article reader)
-  pub fulltext_rx: Option<Receiver<Result<Vec<String>, String>>>,
+  pub fulltext_rx: Option<Receiver<Result<tread::PaperData, String>>>,
   pub fulltext_loading: bool,
-  pub pending_fulltext_paper: Option<notes::PaperRef>,
+  pub pending_fulltext_context: Option<NotesContext>,
   // Background repo fetch (repo viewer)
   pub repo_fetch_rx: Option<Receiver<RepoFetchResult>>,
 
@@ -631,12 +637,12 @@ impl App {
       notes_tabs: Vec::new(),
       notes_active_tab: 0,
       notes_mode: NotesMode::Library,
-      notes_context_paper: None,
+      notes_context: None,
       secondary_notes_active: false,
       secondary_notes_tabs: Vec::new(),
       secondary_notes_active_tab: 0,
       secondary_notes_mode: NotesMode::Library,
-      secondary_notes_context_paper: None,
+      secondary_notes_context: None,
       chat_ui: None,
       chat_active: false,
       chat_fullscreen: false,
@@ -671,7 +677,7 @@ impl App {
       last_read_source: None,
       fulltext_rx: None,
       fulltext_loading: false,
-      pending_fulltext_paper: None,
+      pending_fulltext_context: None,
       repo_fetch_rx: None,
       last_scroll_time: None,
       scroll_debounce_ms: 50,
@@ -2658,35 +2664,38 @@ impl App {
     }
   }
 
-  pub fn notes_context_paper_for_side(
+  pub fn notes_context_for_side(
     &self,
     side: FocusedReader,
-  ) -> Option<&notes::PaperRef> {
+  ) -> Option<&NotesContext> {
     match side {
-      FocusedReader::Primary => self.notes_context_paper.as_ref(),
-      FocusedReader::Secondary => self.secondary_notes_context_paper.as_ref(),
+      FocusedReader::Primary => self.notes_context.as_ref(),
+      FocusedReader::Secondary => self.secondary_notes_context.as_ref(),
     }
   }
 
-  pub fn set_notes_context_paper_for_side(
+  pub fn set_notes_context_for_side(
     &mut self,
     side: FocusedReader,
-    paper: Option<notes::PaperRef>,
+    context: Option<NotesContext>,
   ) {
     match side {
-      FocusedReader::Primary => self.notes_context_paper = paper,
-      FocusedReader::Secondary => self.secondary_notes_context_paper = paper,
+      FocusedReader::Primary => self.notes_context = context,
+      FocusedReader::Secondary => self.secondary_notes_context = context,
     }
   }
 
-  pub fn reader_paper_ref(&self, side: FocusedReader) -> Option<notes::PaperRef> {
+  pub fn reader_notes_context(
+    &self,
+    side: FocusedReader,
+  ) -> Option<NotesContext> {
     let tab = match side {
       FocusedReader::Primary => self.reader_tabs.get(self.reader_active_tab),
       FocusedReader::Secondary => {
         self.reader_secondary_tabs.get(self.reader_secondary_active_tab)
       }
     }?;
-    tab.paper_ref.clone()
+    tab.notes_context.clone()
   }
 
   /// Active primary reader (mutable).  Returns the tread Reader so
@@ -2721,13 +2730,13 @@ impl App {
     &mut self,
     title: String,
     arxiv_id: Option<String>,
-    paper_ref: Option<notes::PaperRef>,
+    notes_context: Option<NotesContext>,
     reader: tread::Reader,
   ) {
     self.reader_tabs.push(ReaderTab {
       title,
       arxiv_id,
-      paper_ref,
+      notes_context,
       reader,
       image_state: tread::ImageState::default(),
     });
@@ -2739,13 +2748,13 @@ impl App {
     &mut self,
     title: String,
     arxiv_id: Option<String>,
-    paper_ref: Option<notes::PaperRef>,
+    notes_context: Option<NotesContext>,
     reader: tread::Reader,
   ) {
     self.reader_secondary_tabs.push(ReaderTab {
       title,
       arxiv_id,
-      paper_ref,
+      notes_context,
       reader,
       image_state: tread::ImageState::default(),
     });
@@ -2756,16 +2765,16 @@ impl App {
     &mut self,
     title: String,
     arxiv_id: Option<String>,
-    paper_ref: Option<notes::PaperRef>,
+    notes_context: Option<NotesContext>,
     reader: tread::Reader,
   ) {
     if self.reader_tabs.is_empty() {
-      self.reader_push_tab(title, arxiv_id, paper_ref, reader);
+      self.reader_push_tab(title, arxiv_id, notes_context, reader);
     } else {
       self.reader_tabs[self.reader_active_tab] = ReaderTab {
         title,
         arxiv_id,
-        paper_ref,
+        notes_context,
         reader,
         image_state: tread::ImageState::default(),
       };
@@ -2777,16 +2786,16 @@ impl App {
     &mut self,
     title: String,
     arxiv_id: Option<String>,
-    paper_ref: Option<notes::PaperRef>,
+    notes_context: Option<NotesContext>,
     reader: tread::Reader,
   ) {
     if self.reader_secondary_tabs.is_empty() {
-      self.reader_secondary_push_tab(title, arxiv_id, paper_ref, reader);
+      self.reader_secondary_push_tab(title, arxiv_id, notes_context, reader);
     } else {
       self.reader_secondary_tabs[self.reader_secondary_active_tab] = ReaderTab {
         title,
         arxiv_id,
-        paper_ref,
+        notes_context,
         reader,
         image_state: tread::ImageState::default(),
       };

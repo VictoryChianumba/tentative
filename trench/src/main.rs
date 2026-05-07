@@ -880,7 +880,7 @@ fn handle_mouse(
 
 pub(crate) fn spawn_fulltext_fetch(
   item: models::FeedItem,
-  tx: mpsc::Sender<Result<Vec<String>, String>>,
+  tx: mpsc::Sender<Result<tread::PaperData, String>>,
 ) {
   std::thread::spawn(move || {
     let tx_panic = tx.clone();
@@ -1242,38 +1242,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           app.fulltext_rx = None;
           app.fulltext_loading = false;
           match result {
-            Ok(lines) => {
-              log::debug!("reader_open: {} lines", lines.len());
-              // arXiv detection: if the queued paper's URL is arxiv,
-              // discard the pre-extracted plain text and re-fetch via
-              // tread's LaTeX-source pipeline so math, tables, figures,
-              // and headers all render.  ~2s blocking call (network
-              // round-trip) — acceptable for v1; future iteration can
-              // background this on a worker thread.  Non-arxiv content
-              // continues through the plain-text path.
-              let paper_ref = app.pending_fulltext_paper.take();
+            Ok(fetched_paper) => {
+              log::debug!(
+                "reader_open: {} blocks from fetcher",
+                fetched_paper.blocks.len()
+              );
+              // arxiv URLs get the rich LaTeX path via fetch_paper —
+              // structured math, tables, figures.  ~2s blocking; v2
+              // can background on a worker.  Non-arxiv keeps the
+              // PaperData the fetcher already produced (HTML walked
+              // by from_html, or summary plain-text).  Image
+              // rendering wiring is task #39, hardcode false here.
+              let notes_context = app.pending_fulltext_context.take();
               let title = app.last_read.clone().unwrap_or_default();
-              let detected_arxiv_id = paper_ref
+              let detected_arxiv_id = notes_context
                 .as_ref()
-                .and_then(|p| tread::extract_arxiv_id(&p.url));
-              let kitty_supported = detected_arxiv_id.is_some();
+                .and_then(|ctx| tread::extract_arxiv_id(&ctx.paper.url));
+              let kitty_supported = false;
               let (arxiv_id, paper) = if let Some(id) = detected_arxiv_id {
                 match tread::fetch_paper(&id, kitty_supported) {
                   Ok(p) => (Some(id), p),
                   Err(e) => {
                     log::warn!(
-                      "tread::fetch_paper failed for {id}, falling back to plain text: {e}"
+                      "tread::fetch_paper failed for {id}, using fetcher result: {e}"
                     );
                     (
-                      paper_ref.as_ref().map(|p| p.id.clone()),
-                      tread::PaperData::from_plain_lines(lines),
+                      notes_context
+                        .as_ref()
+                        .map(|ctx| ctx.paper.id.clone()),
+                      fetched_paper,
                     )
                   }
                 }
               } else {
                 (
-                  paper_ref.as_ref().map(|p| p.id.clone()),
-                  tread::PaperData::from_plain_lines(lines),
+                  notes_context
+                    .as_ref()
+                    .map(|ctx| ctx.paper.id.clone()),
+                  fetched_paper,
                 )
               };
               let reader = tread::Reader::init(
@@ -1285,14 +1291,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                   app.reader_secondary_push_tab(
                     title,
                     arxiv_id,
-                    paper_ref,
+                    notes_context,
                     reader,
                   );
                 } else {
                   app.reader_secondary_replace_active_tab(
                     title,
                     arxiv_id,
-                    paper_ref,
+                    notes_context,
                     reader,
                   );
                 }
@@ -1301,12 +1307,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.fulltext_for_secondary = false;
               } else {
                 if app.fulltext_new_tab {
-                  app.reader_push_tab(title, arxiv_id, paper_ref, reader);
+                  app.reader_push_tab(title, arxiv_id, notes_context, reader);
                 } else {
                   app.reader_replace_active_tab(
                     title,
                     arxiv_id,
-                    paper_ref,
+                    notes_context,
                     reader,
                   );
                 }
@@ -1316,7 +1322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
               app.clear_notification();
             }
             Err(e) => {
-              app.pending_fulltext_paper = None;
+              app.pending_fulltext_context = None;
               app.set_notification(format!("Failed to fetch content: {e}"));
             }
           }
@@ -1328,7 +1334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           app.fulltext_loading = false;
           app.fulltext_for_secondary = false;
           app.fulltext_new_tab = false;
-          app.pending_fulltext_paper = None;
+          app.pending_fulltext_context = None;
           app.set_notification("Fetch error: thread disconnected".to_string());
           app.mark_dirty();
         }
@@ -1342,10 +1348,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(result) => {
           app.reader_popup_rx = None;
           app.fulltext_loading = false;
-          app.pending_fulltext_paper = None;
+          app.pending_fulltext_context = None;
           match result {
-            Ok(lines) => {
-              let paper = tread::PaperData::from_plain_lines(lines);
+            Ok(paper) => {
               let reader = tread::Reader::init(
                 paper, None, None, 80, 24, false,
                 Some(app.voice_controller.clone()),
@@ -1366,7 +1371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
           app.reader_popup_rx = None;
           app.fulltext_loading = false;
-          app.pending_fulltext_paper = None;
+          app.pending_fulltext_context = None;
           app.set_notification("Fetch error: thread disconnected".to_string());
           app.mark_dirty();
         }
