@@ -1746,79 +1746,6 @@ impl App {
     }
   }
 
-  pub fn repo_chat_prompt(&self) -> Option<String> {
-    let ctx = self.repo_context.as_ref()?;
-    let selected_path = match ctx.pane_focus {
-      RepoPane::File => ctx.file_path.clone().or_else(|| ctx.file_name.clone()),
-      RepoPane::Tree => ctx
-        .tree_nodes
-        .get(ctx.tree_cursor)
-        .map(|node| node.path.clone())
-        .or_else(|| {
-          if ctx.tree_path.is_empty() {
-            None
-          } else {
-            Some(ctx.tree_path.clone())
-          }
-        }),
-    };
-
-    let mut prompt = format!(
-      "Help me inspect this repository context.\n\nRepository: {}/{}\nBranch: {}\n",
-      ctx.owner,
-      ctx.repo_name,
-      if ctx.default_branch.is_empty() {
-        "unknown"
-      } else {
-        &ctx.default_branch
-      }
-    );
-
-    if let Some(path) = selected_path.as_deref() {
-      prompt.push_str(&format!("Selected path: {path}\n"));
-    }
-    prompt.push_str(&format!(
-      "Pane: {}\n",
-      match ctx.pane_focus {
-        RepoPane::Tree => "tree",
-        RepoPane::File => "preview",
-      }
-    ));
-
-    if let Some(url) = self.repo_current_url() {
-      prompt.push_str(&format!("GitHub URL: {url}\n"));
-    }
-
-    if let Some(file_name) = ctx.file_name.as_deref() {
-      prompt.push_str(&format!(
-        "Open file: {file_name}\nFile kind: {}\n",
-        repo_file_kind_label(ctx.file_kind)
-      ));
-
-      let excerpt = ctx.raw_file_content.trim();
-      if !excerpt.is_empty() {
-        let truncated = truncate_repo_excerpt(excerpt, 3500);
-        prompt.push_str("\nFile excerpt:\n```text\n");
-        prompt.push_str(&truncated);
-        if !truncated.ends_with('\n') {
-          prompt.push('\n');
-        }
-        prompt.push_str("```\n");
-      }
-    } else if !ctx.tree_nodes.is_empty() {
-      prompt.push_str("\nVisible tree entries:\n");
-      for node in ctx.tree_nodes.iter().take(12) {
-        let kind = match node.node_type {
-          crate::github::NodeType::Dir => "dir",
-          crate::github::NodeType::File => "file",
-        };
-        prompt.push_str(&format!("- {kind}: {}\n", node.path));
-      }
-    }
-
-    Some(prompt)
-  }
-
   /// Save the current open file to ~/Downloads/{filename}.
   // (validate_download_name is defined as a free function below.)
   pub fn repo_download_file(&mut self) {
@@ -2265,14 +2192,6 @@ impl App {
   }
 }
 
-fn repo_file_kind_label(kind: RepoFileKind) -> &'static str {
-  match kind {
-    RepoFileKind::Markdown => "markdown",
-    RepoFileKind::Code => "code",
-    RepoFileKind::PlainText => "text",
-  }
-}
-
 fn encode_repo_url_path(path: &str) -> String {
   let mut out = String::with_capacity(path.len());
   for &b in path.as_bytes() {
@@ -2284,18 +2203,6 @@ fn encode_repo_url_path(path: &str) -> String {
       out.push_str(&format!("%{b:02X}"));
     }
   }
-  out
-}
-
-fn truncate_repo_excerpt(text: &str, max_chars: usize) -> String {
-  if text.chars().count() <= max_chars {
-    return text.to_string();
-  }
-  let mut out = String::new();
-  for c in text.chars().take(max_chars.saturating_sub(1)) {
-    out.push(c);
-  }
-  out.push('…');
   out
 }
 
@@ -2994,16 +2901,38 @@ impl App {
     tread::clear_images(&mut self.reader_popup_image_state);
   }
 
+  /// Stop voice playback and exit reading mode on every open Reader.
+  /// Called when the user navigates away from the source they were
+  /// listening to: tab close, tab switch (prev/next), or full reader
+  /// exit (Esc back to feed).  Voice should stay tied to the active
+  /// reader pane; continuing playback after a transition is
+  /// disorienting.  All Readers share one Arc<PlaybackController>, so
+  /// vc.stop() may fire multiple times — the controller treats
+  /// repeats as no-ops.  Idempotent.
+  pub fn stop_all_reader_voice(&mut self) {
+    for tab in self.reader_tabs.iter_mut() {
+      tab.reader.exit_voice_mode();
+    }
+    for tab in self.reader_secondary_tabs.iter_mut() {
+      tab.reader.exit_voice_mode();
+    }
+    if let Some(reader) = self.reader_popup_editor.as_mut() {
+      reader.exit_voice_mode();
+    }
+  }
+
   /// Close the active primary tab. Returns true if the pane is now empty.
   pub fn reader_close_active_tab(&mut self) -> bool {
     if self.reader_tabs.is_empty() {
       return true;
     }
-    // Clear the image cache before drop so any pixel placements the
+    // Stop voice + clear image cache before drop so audio doesn't
+    // outlive the source it was reading and pixel placements the
     // terminal still has cached for this tab's kitty_ids are deleted
     // — otherwise they linger as ghost overlays on whichever tab
     // takes its slot.
     if let Some(tab) = self.reader_tabs.get_mut(self.reader_active_tab) {
+      tab.reader.exit_voice_mode();
       tread::clear_images(&mut tab.image_state);
     }
     self.reader_tabs.remove(self.reader_active_tab);
@@ -3022,6 +2951,7 @@ impl App {
       return true;
     }
     if let Some(tab) = self.reader_secondary_tabs.get_mut(self.reader_secondary_active_tab) {
+      tab.reader.exit_voice_mode();
       tread::clear_images(&mut tab.image_state);
     }
     self.reader_secondary_tabs.remove(self.reader_secondary_active_tab);
@@ -3035,6 +2965,10 @@ impl App {
   }
 
   pub fn reader_prev_tab(&mut self) {
+    // Voice is tied to the source you were reading.  Switching to a
+    // different tab means you're not in that source anymore — stop
+    // playback so audio doesn't keep going in the background.
+    self.stop_all_reader_voice();
     match self.focused_reader {
       FocusedReader::Primary => {
         let n = self.reader_tabs.len();
@@ -3053,6 +2987,7 @@ impl App {
   }
 
   pub fn reader_next_tab(&mut self) {
+    self.stop_all_reader_voice();
     match self.focused_reader {
       FocusedReader::Primary => {
         let n = self.reader_tabs.len();

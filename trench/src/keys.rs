@@ -16,6 +16,9 @@ use super::{
   spawn_repo_file, spawn_repo_open, truncate_for_notif,
 };
 
+const NOTES_MODE_ORDER: [NotesMode; 3] =
+  [NotesMode::PaperNotes, NotesMode::Library, NotesMode::Capture];
+
 /// Top-level key dispatcher — called once per key press event from the main loop.
 pub fn dispatch(key: KeyEvent, app: &mut App) {
   // Tag picker popup — intercepts all keys when open.
@@ -68,10 +71,14 @@ pub fn dispatch(key: KeyEvent, app: &mut App) {
   // Reader popup (A1) — fully interactive; Esc or reader Quit dismisses.
   if app.reader_popup_active {
     if key.code == KeyCode::Esc {
+      if let Some(reader) = app.reader_popup_editor.as_mut() {
+        reader.exit_voice_mode();
+      }
       app.reader_popup_active = false;
     } else if let Some(reader) = app.reader_popup_editor.as_mut() {
       let action = reader.handle_event(Event::Key(key));
       if matches!(action, tread::ReaderAction::Quit) {
+        reader.exit_voice_mode();
         app.reader_popup_active = false;
       }
     }
@@ -391,7 +398,7 @@ fn handle_leader_or_ctrl_t(key: KeyEvent, app: &mut App) -> bool {
 
 fn open_notes(app: &mut App) {
   let side = note_side_for_focus(app);
-  let context_paper = resolve_notes_paper_context(app, side);
+  let context = resolve_notes_paper_context(app, side);
 
   if app.notes_app.is_none() {
     let mut na = notes::app::App::new();
@@ -420,75 +427,313 @@ fn open_notes(app: &mut App) {
     .notes_app
     .as_ref()
     .map(|na| {
-      context_paper
+      context
         .as_ref()
-        .map(|paper| na.find_notes_for_paper(&paper.id))
+        .map(|ctx| na.find_notes_for_paper(&ctx.paper.id))
         .unwrap_or_default()
     })
     .unwrap_or_default();
 
-  app.set_notes_context_paper_for_side(side, context_paper.clone());
+  app.set_notes_context_for_side(side, context.clone());
 
-  if let Some(paper) = context_paper {
+  if context.is_some() {
     if linked.is_empty() {
-      app.set_notes_mode_for_side(side, NotesMode::Capture);
-      if let Some(na) = app.notes_app.as_mut() {
-        na.focus_article(&paper.id, &paper.title, &paper.url);
-        na.apply_initial_focus();
-      }
+      activate_notes_mode(app, side, NotesMode::Capture);
     } else {
-      app.set_notes_mode_for_side(side, NotesMode::PaperNotes);
-      for note_id in &linked {
-        let exists = match side {
-          FocusedReader::Primary => {
-            app.notes_tabs.iter().any(|t| &t.note_id == note_id)
-          }
-          FocusedReader::Secondary => {
-            app.secondary_notes_tabs.iter().any(|t| &t.note_id == note_id)
-          }
-        };
-        if !exists {
-          let title = app
-            .notes_app
-            .as_ref()
-            .and_then(|na| na.get_note_title(note_id))
-            .unwrap_or_default();
-          match side {
-            FocusedReader::Primary => {
-              app.notes_tabs.push(NotesTab { note_id: note_id.clone(), title });
-            }
-            FocusedReader::Secondary => {
-              app
-                .secondary_notes_tabs
-                .push(NotesTab { note_id: note_id.clone(), title });
-            }
-          }
-        }
-      }
-      let idx = match side {
-        FocusedReader::Primary => {
-          app.notes_tabs.iter().position(|t| linked.contains(&t.note_id))
-        }
-        FocusedReader::Secondary => app
-          .secondary_notes_tabs
-          .iter()
-          .position(|t| linked.contains(&t.note_id)),
-      };
-      if let Some(idx) = idx {
-        notes_switch_tab(app, side, idx);
-      }
+      activate_notes_mode(app, side, NotesMode::PaperNotes);
     }
   } else {
-    app.set_notes_mode_for_side(side, NotesMode::Library);
-    if let Some(na) = app.notes_app.as_mut() {
-      if na.focused_note_id().is_none() {
-        na.apply_initial_focus();
-      }
-    }
+    activate_notes_mode(app, side, NotesMode::Library);
   }
 
   set_notes_side_active(app, side, true);
   app.focused_pane = note_pane_for_side(app, side);
+}
+
+fn notes_shell_shortcuts_allowed(notes_app: &notes::app::App) -> bool {
+  notes_app.active_popup.is_none()
+    && notes_app.notes_state != notes::app::NotesState::Editor
+}
+
+fn visible_note_ids(app: &App, side: FocusedReader) -> Vec<String> {
+  let Some(notes_app) = app.notes_app.as_ref() else {
+    return Vec::new();
+  };
+  match app.notes_mode_for_side(side) {
+    NotesMode::Capture => Vec::new(),
+    NotesMode::Library => notes_app
+      .get_active_notes()
+      .map(|note| note.note_id.clone())
+      .collect(),
+    NotesMode::PaperNotes => {
+      let Some(context) = app.notes_context_for_side(side) else {
+        return Vec::new();
+      };
+      notes_app
+        .get_active_notes()
+        .filter(|note| {
+          note.linked_papers.iter().any(|paper| paper.id == context.paper.id)
+        })
+        .map(|note| note.note_id.clone())
+        .collect()
+    }
+  }
+}
+
+fn ensure_notes_browser_selection(app: &mut App, side: FocusedReader) {
+  let visible_ids = visible_note_ids(app, side);
+  let Some(notes_app) = app.notes_app.as_mut() else {
+    return;
+  };
+
+  notes_app.notes_state = notes::app::NotesState::List;
+  if visible_ids.is_empty() {
+    notes_app.set_current_note(None);
+    return;
+  }
+
+  let current = notes_app.current_note_id.clone();
+  if current.as_ref().is_some_and(|id| visible_ids.iter().any(|visible| visible == id))
+  {
+    return;
+  }
+
+  notes_app.set_current_note(visible_ids.first().cloned());
+}
+
+fn sync_notes_tabs_for_paper_mode(
+  app: &mut App,
+  side: FocusedReader,
+  context: &crate::app::NotesContext,
+) {
+  let linked = app
+    .notes_app
+    .as_ref()
+    .map(|na| na.find_notes_for_paper(&context.paper.id))
+    .unwrap_or_default();
+
+  for note_id in &linked {
+    let exists = match side {
+      FocusedReader::Primary => {
+        app.notes_tabs.iter().any(|tab| &tab.note_id == note_id)
+      }
+      FocusedReader::Secondary => app
+        .secondary_notes_tabs
+        .iter()
+        .any(|tab| &tab.note_id == note_id),
+    };
+    if exists {
+      continue;
+    }
+    let title = app
+      .notes_app
+      .as_ref()
+      .and_then(|na| na.get_note_title(note_id))
+      .unwrap_or_default();
+    match side {
+      FocusedReader::Primary => {
+        app.notes_tabs.push(NotesTab { note_id: note_id.clone(), title });
+      }
+      FocusedReader::Secondary => {
+        app
+          .secondary_notes_tabs
+          .push(NotesTab { note_id: note_id.clone(), title });
+      }
+    }
+  }
+}
+
+fn sync_notes_tab_selection_to_current_note(app: &mut App, side: FocusedReader) {
+  let current_id = app
+    .notes_app
+    .as_ref()
+    .and_then(|notes_app| notes_app.current_note_id.clone());
+  let Some(current_id) = current_id else {
+    return;
+  };
+  match side {
+    FocusedReader::Primary => {
+      if let Some(idx) =
+        app.notes_tabs.iter().position(|tab| tab.note_id == current_id)
+      {
+        app.notes_active_tab = idx;
+      }
+    }
+    FocusedReader::Secondary => {
+      if let Some(idx) = app
+        .secondary_notes_tabs
+        .iter()
+        .position(|tab| tab.note_id == current_id)
+      {
+        app.secondary_notes_active_tab = idx;
+      }
+    }
+  }
+}
+
+fn activate_notes_mode(app: &mut App, side: FocusedReader, mode: NotesMode) {
+  let context = app
+    .notes_context_for_side(side)
+    .cloned()
+    .or_else(|| resolve_notes_paper_context(app, side));
+  if context.is_some() {
+    app.set_notes_context_for_side(side, context.clone());
+  }
+  app.set_notes_mode_for_side(side, mode);
+
+  if let Some(notes_app) = app.notes_app.as_mut() {
+    notes_app.notes_state = notes::app::NotesState::List;
+    notes_app.active_popup = notes::app::ActivePopup::None;
+  }
+
+  match mode {
+    NotesMode::Capture => {
+      if let Some(notes_app) = app.notes_app.as_mut() {
+        notes_app.set_current_note(None);
+      }
+    }
+    NotesMode::Library => {
+      ensure_notes_browser_selection(app, side);
+    }
+    NotesMode::PaperNotes => {
+      if let Some(context) = context.as_ref() {
+        sync_notes_tabs_for_paper_mode(app, side, context);
+      }
+      ensure_notes_browser_selection(app, side);
+      sync_notes_tab_selection_to_current_note(app, side);
+    }
+  }
+}
+
+fn cycle_notes_mode(app: &mut App, side: FocusedReader, direction: isize) {
+  let current = NOTES_MODE_ORDER
+    .iter()
+    .position(|mode| *mode == app.notes_mode_for_side(side))
+    .unwrap_or(0) as isize;
+  let next = (current + direction).rem_euclid(NOTES_MODE_ORDER.len() as isize);
+  activate_notes_mode(app, side, NOTES_MODE_ORDER[next as usize]);
+}
+
+fn begin_capture_note(app: &mut App, side: FocusedReader) {
+  let Some(context) = app.notes_context_for_side(side).cloned() else {
+    app.set_notification("Capture needs a paper context.".to_string());
+    return;
+  };
+  let Some(notes_app) = app.notes_app.as_mut() else {
+    return;
+  };
+  notes_app.focus_article(
+    &context.paper.id,
+    &context.paper.title,
+    &context.paper.url,
+  );
+  notes_app.apply_initial_focus();
+}
+
+fn select_notes_browser_index(app: &mut App, side: FocusedReader, index: usize) {
+  let visible_ids = visible_note_ids(app, side);
+  let Some(note_id) = visible_ids.get(index).cloned() else {
+    return;
+  };
+  if let Some(notes_app) = app.notes_app.as_mut() {
+    notes_app.set_current_note(Some(note_id));
+    notes_app.notes_state = notes::app::NotesState::List;
+  }
+  sync_notes_tab_selection_to_current_note(app, side);
+}
+
+fn move_notes_browser_selection(
+  app: &mut App,
+  side: FocusedReader,
+  delta: isize,
+  page_size: usize,
+  absolute: Option<usize>,
+) {
+  let visible_ids = visible_note_ids(app, side);
+  if visible_ids.is_empty() {
+    if let Some(notes_app) = app.notes_app.as_mut() {
+      notes_app.set_current_note(None);
+      notes_app.notes_state = notes::app::NotesState::List;
+    }
+    return;
+  }
+
+  let current_idx = app
+    .notes_app
+    .as_ref()
+    .and_then(|notes_app| {
+      notes_app.current_note_id.as_ref().and_then(|current_id| {
+        visible_ids.iter().position(|note_id| note_id == current_id)
+      })
+    })
+    .unwrap_or(0);
+
+  let target = if let Some(absolute) = absolute {
+    absolute.min(visible_ids.len() - 1)
+  } else if delta == 0 {
+    current_idx
+  } else if delta > 1 || delta < -1 {
+    (current_idx as isize + delta * page_size as isize)
+      .clamp(0, (visible_ids.len() - 1) as isize) as usize
+  } else {
+    (current_idx as isize + delta)
+      .clamp(0, (visible_ids.len() - 1) as isize) as usize
+  };
+
+  select_notes_browser_index(app, side, target);
+}
+
+fn mutate_note_links_for_context(
+  app: &mut App,
+  side: FocusedReader,
+  detach: bool,
+) {
+  let Some(context) = app.notes_context_for_side(side).cloned() else {
+    app.set_notification("No paper context for this notes pane.".to_string());
+    return;
+  };
+  let Some(notes_app) = app.notes_app.as_mut() else {
+    return;
+  };
+  let Some(note) = notes_app.get_current_note().cloned() else {
+    app.set_notification("No active note selected.".to_string());
+    return;
+  };
+
+  let already_linked =
+    note.linked_papers.iter().any(|paper| paper.id == context.paper.id);
+  if detach && !already_linked {
+    app.set_notification("Current paper is not linked to this note.".to_string());
+    return;
+  }
+  if !detach && already_linked {
+    app.set_notification("Current paper is already linked to this note.".to_string());
+    return;
+  }
+
+  let mut linked_papers = note.linked_papers.clone();
+  if detach {
+    linked_papers.retain(|paper| paper.id != context.paper.id);
+  } else {
+    linked_papers.push(context.paper.clone());
+  }
+
+  if let Err(err) = notes_app.update_current_note_attributes(
+    note.title.clone(),
+    linked_papers,
+    note.tags.clone(),
+  ) {
+    app.set_notification(format!("Failed to update note links: {err}"));
+    return;
+  }
+
+  if !detach {
+    sync_notes_tabs_for_paper_mode(app, side, &context);
+  }
+  ensure_notes_browser_selection(app, side);
+  sync_notes_tab_selection_to_current_note(app, side);
+  let action = if detach { "Detached" } else { "Attached" };
+  app.set_notification(format!("{action} current paper in note."));
 }
 
 fn notes_side_active(app: &App, side: FocusedReader) -> bool {
@@ -627,17 +872,30 @@ fn paper_ref_from_item(item: &crate::models::FeedItem) -> notes::PaperRef {
   }
 }
 
+fn source_label_for_item(item: &crate::models::FeedItem) -> String {
+  if item.source_name.is_empty() {
+    item.source_platform.short_label().to_string()
+  } else {
+    item.source_name.clone()
+  }
+}
+
+fn notes_context_from_item(
+  item: &crate::models::FeedItem,
+) -> crate::app::NotesContext {
+  crate::app::NotesContext {
+    paper: paper_ref_from_item(item),
+    source_label: source_label_for_item(item),
+  }
+}
+
 fn remember_fulltext_paper_context(
   app: &mut App,
   item: &crate::models::FeedItem,
 ) {
   app.last_read = Some(item.title.clone());
-  app.last_read_source = Some(if item.source_name.is_empty() {
-    item.source_platform.short_label().to_string()
-  } else {
-    item.source_name.clone()
-  });
-  app.pending_fulltext_paper = Some(paper_ref_from_item(item));
+  app.last_read_source = Some(source_label_for_item(item));
+  app.pending_fulltext_context = Some(notes_context_from_item(item));
   app.record_paper_open(item);
 }
 
@@ -673,58 +931,64 @@ fn find_item_by_arxiv_id<'a>(
     })
 }
 
-fn paper_ref_from_history_entry(
+fn notes_context_from_history_entry(
   app: &App,
   entry: &crate::history::HistoryEntry,
-) -> Option<notes::PaperRef> {
+) -> Option<crate::app::NotesContext> {
   if entry.kind != crate::history::HistoryKind::Paper {
     return None;
   }
   if let Some(item) = find_item_by_url(app, &entry.key) {
-    return Some(paper_ref_from_item(item));
+    return Some(notes_context_from_item(item));
   }
   if let Some(arxiv_id) = crate::models::arxiv_id_from_url(&entry.key) {
     if let Some(item) = find_item_by_arxiv_id(app, arxiv_id) {
-      return Some(paper_ref_from_item(item));
+      return Some(notes_context_from_item(item));
     }
-    return Some(notes::PaperRef {
-      id: arxiv_id.to_string(),
-      title: entry.title.clone(),
-      url: entry.key.clone(),
+    return Some(crate::app::NotesContext {
+      paper: notes::PaperRef {
+        id: arxiv_id.to_string(),
+        title: entry.title.clone(),
+        url: entry.key.clone(),
+      },
+      source_label: entry.source.clone(),
     });
   }
-  Some(notes::PaperRef {
-    id: entry.key.clone(),
-    title: entry.title.clone(),
-    url: entry.key.clone(),
+  Some(crate::app::NotesContext {
+    paper: notes::PaperRef {
+      id: entry.key.clone(),
+      title: entry.title.clone(),
+      url: entry.key.clone(),
+    },
+    source_label: entry.source.clone(),
   })
 }
 
-fn history_selected_paper_ref(app: &App) -> Option<notes::PaperRef> {
+fn history_selected_paper_ref(app: &App) -> Option<crate::app::NotesContext> {
   let visible = app.filtered_history();
   let entry = visible.get(app.history_selected_index)?;
-  paper_ref_from_history_entry(app, entry)
+  notes_context_from_history_entry(app, entry)
 }
 
 fn resolve_notes_paper_context(
   app: &App,
   side: FocusedReader,
-) -> Option<notes::PaperRef> {
+) -> Option<crate::app::NotesContext> {
   match app.focused_pane {
-    PaneId::Reader => app.reader_paper_ref(FocusedReader::Primary),
-    PaneId::SecondaryReader => app.reader_paper_ref(FocusedReader::Secondary),
+    PaneId::Reader => app.reader_notes_context(FocusedReader::Primary),
+    PaneId::SecondaryReader => app.reader_notes_context(FocusedReader::Secondary),
     PaneId::Notes | PaneId::SecondaryNotes => app
-      .notes_context_paper_for_side(side)
+      .notes_context_for_side(side)
       .cloned()
-      .or_else(|| app.reader_paper_ref(side)),
+      .or_else(|| app.reader_notes_context(side)),
     PaneId::Feed | PaneId::Details => {
       if app.feed_tab == FeedTab::History {
         history_selected_paper_ref(app)
       } else {
-        app.selected_item().map(paper_ref_from_item)
+        app.selected_item().map(notes_context_from_item)
       }
     }
-    _ => app.selected_item().map(paper_ref_from_item),
+    _ => app.selected_item().map(notes_context_from_item),
   }
 }
 
@@ -1094,6 +1358,7 @@ fn notes_switch_tab(app: &mut App, side: FocusedReader, idx: usize) {
   if let Some(note_id) = note_id {
     if let Some(na) = app.notes_app.as_mut() {
       na.focus_note(&note_id);
+      na.notes_state = notes::app::NotesState::List;
     }
   }
 }
@@ -1191,6 +1456,72 @@ fn handle_notes_pane(key: KeyEvent, app: &mut App) -> bool {
   };
   sync_notes_app_to_side(app, side);
   log::debug!("routing to notes pane");
+  let allows_shell_shortcuts = app
+    .notes_app
+    .as_ref()
+    .is_some_and(notes_shell_shortcuts_allowed);
+  if allows_shell_shortcuts {
+    if let Some(notes_app) = app.notes_app.as_mut() {
+      notes_app.notes_state = notes::app::NotesState::List;
+    }
+    match key.code {
+      KeyCode::Char('[') => {
+        cycle_notes_mode(app, side, -1);
+        return true;
+      }
+      KeyCode::Char(']') => {
+        cycle_notes_mode(app, side, 1);
+        return true;
+      }
+      KeyCode::Char('a') if app.notes_mode_for_side(side) != NotesMode::Capture => {
+        mutate_note_links_for_context(app, side, false);
+        return true;
+      }
+      KeyCode::Char('x') if app.notes_mode_for_side(side) != NotesMode::Capture => {
+        mutate_note_links_for_context(app, side, true);
+        return true;
+      }
+      KeyCode::Char('n') if app.notes_mode_for_side(side) == NotesMode::Capture => {
+        begin_capture_note(app, side);
+        return true;
+      }
+      KeyCode::Enter if app.notes_mode_for_side(side) == NotesMode::Capture => {
+        begin_capture_note(app, side);
+        return true;
+      }
+      KeyCode::Char('j') | KeyCode::Down
+        if app.notes_mode_for_side(side) != NotesMode::Capture =>
+      {
+        move_notes_browser_selection(app, side, 1, 1, None);
+        return true;
+      }
+      KeyCode::Char('k') | KeyCode::Up
+        if app.notes_mode_for_side(side) != NotesMode::Capture =>
+      {
+        move_notes_browser_selection(app, side, -1, 1, None);
+        return true;
+      }
+      KeyCode::Char('g') if app.notes_mode_for_side(side) != NotesMode::Capture => {
+        move_notes_browser_selection(app, side, 0, 1, Some(0));
+        return true;
+      }
+      KeyCode::Char('G') if app.notes_mode_for_side(side) != NotesMode::Capture => {
+        move_notes_browser_selection(app, side, 0, 1, Some(usize::MAX));
+        return true;
+      }
+      KeyCode::PageDown
+        if app.notes_mode_for_side(side) != NotesMode::Capture =>
+      {
+        move_notes_browser_selection(app, side, 1, 8, None);
+        return true;
+      }
+      KeyCode::PageUp if app.notes_mode_for_side(side) != NotesMode::Capture => {
+        move_notes_browser_selection(app, side, -1, 8, None);
+        return true;
+      }
+      _ => {}
+    }
+  }
   if let Some(notes_app) = app.notes_app.as_mut() {
     if notes::handle_key(key, notes_app) {
       if let Err(e) = notes_app.persist_state() {
@@ -1239,6 +1570,8 @@ fn handle_notes_pane(key: KeyEvent, app: &mut App) -> bool {
         }
       }
     }
+    ensure_notes_browser_selection(app, side);
+    sync_notes_tab_selection_to_current_note(app, side);
   }
   true
 }
@@ -1409,6 +1742,11 @@ fn reader_back(app: &mut App, side: FocusedReader) -> bool {
 
 /// Close all reader state and return focus to the feed.
 fn close_all_readers(app: &mut App) {
+  // Stop voice + clear pixel placements before tabs drop — voice
+  // shouldn't continue once we leave the reader entirely, and
+  // ghost image placements would otherwise sit over the feed.
+  app.stop_all_reader_voice();
+  app.clear_all_reader_image_state();
   app.reader_active = false;
   app.reader_dual_active = false;
   app.reader_split_active = false;
@@ -1433,7 +1771,18 @@ fn handle_repo_viewer(key: KeyEvent, app: &mut App) -> bool {
   log::debug!("routing to repo viewer");
   match key.code {
     KeyCode::Char('q') => app.close_repo_viewer(),
-    KeyCode::Tab => app.repo_switch_pane(),
+    KeyCode::Esc => {
+      if app
+        .repo_context
+        .as_ref()
+        .is_some_and(|ctx| ctx.pane_focus == RepoPane::File)
+      {
+        app.repo_switch_pane();
+      } else {
+        app.close_repo_viewer();
+      }
+    }
+    KeyCode::Tab | KeyCode::BackTab => app.repo_switch_pane(),
     KeyCode::Char('j') | KeyCode::Down => app.repo_nav_down(0),
     KeyCode::Char('k') | KeyCode::Up => app.repo_nav_up(),
     KeyCode::Char('h') | KeyCode::Left => app.repo_pan_left(),
@@ -1441,6 +1790,15 @@ fn handle_repo_viewer(key: KeyEvent, app: &mut App) -> bool {
     KeyCode::Char('+') | KeyCode::Char('=') => app.repo_zoom_in(),
     KeyCode::Char('-') => app.repo_zoom_out(),
     KeyCode::Char('y') => app.repo_copy_path(),
+    KeyCode::Char('u') => app.repo_copy_url(),
+    KeyCode::Char('o') => {
+      if let Some(url) = app.repo_current_url() {
+        open_url(&url);
+        app.set_repo_status(format!("Opened: {url}"));
+      } else {
+        app.set_repo_status("No repo URL available.".to_string());
+      }
+    }
     KeyCode::Char('d') => app.repo_download_file(),
     KeyCode::Enter => {
       log::debug!(
