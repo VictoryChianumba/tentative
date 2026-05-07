@@ -1462,7 +1462,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           app.mark_dirty();
         }
         Event::Resize(_, _) => {
+          // Pane reflow moves every image's placement coords;
+          // clear the cached placements so the next draw re-emits
+          // at the new positions instead of stacking ghosts.
+          app.clear_all_reader_image_state();
           app.mark_dirty();
+        }
+        Event::FocusLost => {
+          // tmux pane switch: kitty placements painted at absolute
+          // screen coords would otherwise bleed into whatever pane
+          // is on top.  Delete them; FocusGained re-emits via the
+          // next draw cycle.
+          app.clear_all_reader_image_state();
         }
         _ => {}
       }
@@ -1483,7 +1494,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           app.mark_dirty();
         }
         Event::Resize(_, _) => {
+          app.clear_all_reader_image_state();
           app.mark_dirty();
+        }
+        Event::FocusLost => {
+          app.clear_all_reader_image_state();
         }
         _ => {}
       }

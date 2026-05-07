@@ -11,8 +11,8 @@ use ratatui::{
 
 use super::repo_viewer::draw_repo_viewer;
 use crate::app::{
-  App, AppView, DiscoverResult, FeedTab, FocusedReader, NotesTab, PaneId,
-  QuitPopupKind, ReaderTab, SourcesDetectState,
+  App, AppView, DiscoverResult, FeedTab, FocusedReader, NotesMode, NotesTab,
+  PaneId, QuitPopupKind, ReaderTab, SourcesDetectState,
 };
 use crate::config::{self, CUSTOM_THEME_ROLES};
 use crate::models::{
@@ -622,31 +622,337 @@ fn note_pane_for_side(side: FocusedReader) -> PaneId {
   }
 }
 
-fn draw_notes_context_line(
+fn notes_browser_visible<'a>(
+  app: &'a App,
+  side: FocusedReader,
+) -> Vec<&'a notes::Note> {
+  let Some(notes_app) = app.notes_app.as_ref() else {
+    return Vec::new();
+  };
+  match app.notes_mode_for_side(side) {
+    NotesMode::Capture => Vec::new(),
+    NotesMode::Library => notes_app.get_active_notes().collect(),
+    NotesMode::PaperNotes => {
+      let Some(context) = app.notes_context_for_side(side) else {
+        return Vec::new();
+      };
+      notes_app
+        .get_active_notes()
+        .filter(|note| {
+          note.linked_papers.iter().any(|paper| paper.id == context.paper.id)
+        })
+        .collect()
+    }
+  }
+}
+
+fn notes_browser_selected_index(app: &App, side: FocusedReader) -> Option<usize> {
+  let current_id = app.notes_app.as_ref()?.current_note_id.as_ref()?;
+  notes_browser_visible(app, side)
+    .iter()
+    .position(|note| &note.note_id == current_id)
+}
+
+fn notes_browser_selected_note<'a>(
+  app: &'a App,
+  side: FocusedReader,
+) -> Option<&'a notes::Note> {
+  let visible = notes_browser_visible(app, side);
+  let idx = notes_browser_selected_index(app, side)?;
+  visible.get(idx).copied()
+}
+
+fn draw_notes_mode_switcher(
   frame: &mut Frame,
   area: Rect,
-  app: &App,
-  side: FocusedReader,
+  mode: NotesMode,
+  focused: bool,
   t: &crate::theme::Theme,
 ) {
-  let mode = app.notes_mode_for_side(side);
-  let text = match (mode, app.notes_context_paper_for_side(side)) {
-    (crate::app::NotesMode::PaperNotes, Some(paper)) => {
-      format!("paper  {}", truncate(&paper.title, area.width as usize))
-    }
-    (crate::app::NotesMode::Capture, Some(paper)) => {
-      format!("new note  {}", truncate(&paper.title, area.width as usize))
-    }
-    (crate::app::NotesMode::Library, _) => "all notes".to_string(),
-    (_, None) => "no paper context".to_string(),
+  let ordinary = Style::default().fg(t.text_dim);
+  let active = if focused {
+    Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
+  } else {
+    Style::default().fg(t.header).add_modifier(Modifier::BOLD)
   };
+  let mut spans = Vec::new();
+  for (idx, candidate) in
+    [NotesMode::PaperNotes, NotesMode::Library, NotesMode::Capture]
+      .into_iter()
+      .enumerate()
+  {
+    if idx > 0 {
+      spans.push(Span::styled("  ·  ", ordinary));
+    }
+    let label = match candidate {
+      NotesMode::PaperNotes => "Paper Notes",
+      NotesMode::Library => "Library",
+      NotesMode::Capture => "Capture",
+    };
+    spans.push(Span::styled(
+      label,
+      if candidate == mode { active } else { ordinary },
+    ));
+  }
   frame.render_widget(
-    Paragraph::new(Line::from(Span::styled(
-      text,
-      Style::default().fg(t.text_dim),
-    ))),
+    Paragraph::new(Line::from(spans)).style(Style::default().fg(t.text_dim)),
     area,
   );
+}
+
+fn build_notes_summary_line(
+  app: &App,
+  side: FocusedReader,
+  width: u16,
+  t: &crate::theme::Theme,
+) -> Line<'static> {
+  let mode = app.notes_mode_for_side(side);
+  let context = app.notes_context_for_side(side);
+  let visible_count = notes_browser_visible(app, side).len();
+  let selected_note = notes_browser_selected_note(app, side);
+  let summary = match mode {
+    NotesMode::Library => {
+      if let Some(note) = selected_note {
+        format!(
+          "{} notes  ·  selected {}",
+          visible_count,
+          truncate(&note.title, width.saturating_sub(24) as usize)
+        )
+      } else {
+        format!("{visible_count} notes in library")
+      }
+    }
+    NotesMode::PaperNotes => {
+      if let Some(ctx) = context {
+        format!(
+          "{}  ·  {}  ·  {} linked",
+          truncate(&ctx.paper.title, width.saturating_sub(28) as usize),
+          ctx.source_label,
+          visible_count
+        )
+      } else {
+        "No paper context".to_string()
+      }
+    }
+    NotesMode::Capture => {
+      if let Some(ctx) = context {
+        format!(
+          "{}  ·  {}  ·  ready to capture",
+          truncate(&ctx.paper.title, width.saturating_sub(36) as usize),
+          ctx.source_label
+        )
+      } else {
+        "No paper context".to_string()
+      }
+    }
+  };
+  Line::from(Span::styled(
+    truncate(&summary, width as usize),
+    Style::default().fg(t.text_dim),
+  ))
+}
+
+fn draw_notes_empty_state(
+  frame: &mut Frame,
+  area: Rect,
+  mode: NotesMode,
+  t: &crate::theme::Theme,
+) {
+  let lines = match mode {
+    NotesMode::PaperNotes => vec![
+      Line::from(Span::styled(
+        "No notes linked to this paper.",
+        Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+      )),
+      Line::from(""),
+      Line::from(Span::styled(
+        "Press ] to switch to Capture, then n or Enter to create one.",
+        Style::default().fg(t.text_dim),
+      )),
+    ],
+    NotesMode::Library => vec![
+      Line::from(Span::styled(
+        "No notes yet.",
+        Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+      )),
+      Line::from(""),
+      Line::from(Span::styled(
+        "Press n to create a note, or open notes from a paper with Ldr+n.",
+        Style::default().fg(t.text_dim),
+      )),
+    ],
+    NotesMode::Capture => vec![
+      Line::from(Span::styled(
+        "Capture a linked note.",
+        Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+      )),
+      Line::from(""),
+      Line::from(Span::styled(
+        "Press n or Enter to open the prefilled composer.",
+        Style::default().fg(t.text_dim),
+      )),
+    ],
+  };
+  let chunks = Layout::vertical([
+    Constraint::Percentage(24),
+    Constraint::Length((lines.len() as u16).saturating_add(1)),
+    Constraint::Min(0),
+  ])
+  .split(area);
+  frame.render_widget(
+    Paragraph::new(lines)
+      .alignment(Alignment::Center)
+      .wrap(Wrap { trim: false })
+      .style(Style::default().fg(t.text_dim)),
+    chunks[1],
+  );
+}
+
+fn note_list_meta_summary(note: &notes::Note) -> String {
+  let mut parts = Vec::new();
+  if !note.tags.is_empty() {
+    let noun = if note.tags.len() == 1 { "tag" } else { "tags" };
+    parts.push(format!("{} {noun}", note.tags.len()));
+  }
+  let noun = if note.linked_papers.len() == 1 { "paper" } else { "papers" };
+  parts.push(format!("{} {noun}", note.linked_papers.len()));
+  parts.push(note.updated_at.format("%Y-%m-%d").to_string());
+  parts.join("  ·  ")
+}
+
+fn note_preview_meta_summary(note: &notes::Note) -> String {
+  let mut parts = Vec::new();
+  let noun = if note.linked_papers.len() == 1 { "paper" } else { "papers" };
+  parts.push(format!("{} {noun}", note.linked_papers.len()));
+  parts.push(note.updated_at.format("%Y-%m-%d").to_string());
+  if !note.tags.is_empty() {
+    parts.push(note.tags.iter().take(3).cloned().collect::<Vec<_>>().join(", "));
+  }
+  parts.join("  ·  ")
+}
+
+fn draw_notes_browser_list(
+  frame: &mut Frame,
+  area: Rect,
+  notes: &[&notes::Note],
+  selected_idx: Option<usize>,
+  focused: bool,
+  t: &crate::theme::Theme,
+) {
+  if area.height == 0 || area.width == 0 {
+    return;
+  }
+  if notes.is_empty() {
+    draw_notes_empty_state(frame, area, NotesMode::Library, t);
+    return;
+  }
+
+  let slots = (area.height as usize / 2).max(1);
+  let selected = selected_idx.unwrap_or(0).min(notes.len().saturating_sub(1));
+  let start = selected.saturating_sub(slots / 2).min(notes.len().saturating_sub(slots));
+  let end = (start + slots).min(notes.len());
+  let selection_style = if focused {
+    Style::default().bg(t.bg_selection).fg(t.text)
+  } else {
+    Style::default().bg(t.bg_panel).fg(t.text)
+  };
+
+  let mut y = area.y;
+  for (idx, note) in notes[start..end].iter().enumerate() {
+    let note_index = start + idx;
+    let row_area = Rect {
+      x: area.x,
+      y,
+      width: area.width,
+      height: 2.min(area.y + area.height - y),
+    };
+    let is_selected = note_index == selected;
+    let title = truncate(&note.title, area.width.saturating_sub(3) as usize);
+    let meta = truncate(
+      &note_list_meta_summary(note),
+      area.width.saturating_sub(3) as usize,
+    );
+    let lines = vec![
+      Line::from(vec![
+        Span::styled(if is_selected { "› " } else { "  " }, if is_selected { selection_style } else { Style::default().fg(t.text_dim) }),
+        Span::styled(
+          title,
+          if is_selected {
+            selection_style.add_modifier(Modifier::BOLD)
+          } else {
+            Style::default().fg(t.text)
+          },
+        ),
+      ]),
+      Line::from(vec![
+        Span::styled("  ", if is_selected { selection_style } else { Style::default() }),
+        Span::styled(
+          meta,
+          if is_selected {
+            selection_style.remove_modifier(Modifier::BOLD)
+          } else {
+            Style::default().fg(t.text_dim)
+          },
+        ),
+      ]),
+    ];
+    frame.render_widget(
+      Paragraph::new(lines)
+        .style(if is_selected { selection_style } else { Style::default() })
+        .wrap(Wrap { trim: false }),
+      row_area,
+    );
+    y = y.saturating_add(2);
+    if y >= area.y + area.height {
+      break;
+    }
+  }
+}
+
+fn draw_notes_browser_preview(
+  frame: &mut Frame,
+  area: Rect,
+  note: Option<&notes::Note>,
+  t: &crate::theme::Theme,
+) {
+  let inner = Rect {
+    x: area.x.saturating_add(1),
+    y: area.y,
+    width: area.width.saturating_sub(1),
+    height: area.height,
+  };
+  let Some(note) = note else {
+    frame.render_widget(
+      Paragraph::new("No note selected")
+        .style(Style::default().fg(t.text_dim))
+        .alignment(Alignment::Center),
+      inner,
+    );
+    return;
+  };
+  let mut lines = vec![Line::from(""), Line::from(Span::styled(
+    truncate(&note.title, inner.width as usize),
+    Style::default().fg(t.header).add_modifier(Modifier::BOLD),
+  ))];
+  lines.push(Line::from(Span::styled(
+    truncate(&note_preview_meta_summary(note), inner.width as usize),
+    Style::default().fg(t.text_dim),
+  )));
+  lines.push(Line::from(""));
+  if note.content.trim().is_empty() {
+    lines.push(Line::from(Span::styled(
+      "Empty note",
+      Style::default().fg(t.text_dim),
+    )));
+  } else {
+    for line in textwrap::wrap(&note.content, area.width as usize).into_iter() {
+      lines.push(Line::from(Span::styled(
+        line.into_owned(),
+        Style::default().fg(t.text),
+      )));
+    }
+  }
+  frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn draw_notes_surface(
@@ -663,12 +969,23 @@ fn draw_notes_surface(
   let is_focused = app.focused_pane == note_pane_for_side(side);
   let (tabs, active) = note_tabs_for_side(app, side);
   let tabs = tabs.to_vec();
-  let rows = Layout::vertical([
-    Constraint::Length(1),
-    Constraint::Length(1),
-    Constraint::Length(1),
-    Constraint::Min(0),
-  ])
+  let show_tabs = tabs.len() > 1;
+  let rows = Layout::vertical(if show_tabs {
+    vec![
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Min(0),
+    ]
+  } else {
+    vec![
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Length(1),
+      Constraint::Min(0),
+    ]
+  })
   .split(area);
   draw_note_dock_rule(
     frame,
@@ -677,15 +994,124 @@ fn draw_notes_surface(
     is_focused,
     theme,
   );
-  draw_notes_context_line(frame, rows[1], app, side, theme);
-  draw_notes_tab_bar(frame, rows[2], &tabs, active, is_focused, theme);
-
-  if is_focused || !preview_when_unfocused {
-    if let Some(notes_app) = app.notes_app.as_mut() {
-      notes::draw(frame, rows[3], notes_app, theme);
-    }
+  draw_notes_mode_switcher(
+    frame,
+    rows[1],
+    app.notes_mode_for_side(side),
+    is_focused,
+    theme,
+  );
+  frame.render_widget(
+    Paragraph::new(build_notes_summary_line(app, side, rows[2].width, theme))
+      .wrap(Wrap { trim: false }),
+    rows[2],
+  );
+  let content_row = if show_tabs {
+    draw_notes_tab_bar(frame, rows[3], &tabs, active, is_focused, theme);
+    4
   } else {
-    draw_note_preview(frame, app, rows[3], &tabs, active, theme);
+    3
+  };
+  let content_area = rows[content_row];
+
+  let editor_active = app
+    .notes_app
+    .as_ref()
+    .is_some_and(|notes_app| {
+      notes_app.notes_state == notes::app::NotesState::Editor
+    });
+  let popup_active = app
+    .notes_app
+    .as_ref()
+    .is_some_and(|notes_app| !notes_app.active_popup.is_none());
+
+  if editor_active {
+    if let Some(notes_app) = app.notes_app.as_mut() {
+      notes_app.draw_editor_surface(frame, content_area);
+      if popup_active {
+        notes_app.draw_popup_overlay(frame, content_area);
+      }
+    }
+    return;
+  }
+
+  if preview_when_unfocused && !is_focused {
+    draw_note_preview(frame, app, content_area, &tabs, active, theme);
+    if popup_active {
+      if let Some(notes_app) = app.notes_app.as_mut() {
+        notes_app.draw_popup_overlay(frame, content_area);
+      }
+    }
+    return;
+  }
+
+  match app.notes_mode_for_side(side) {
+    NotesMode::Capture => {
+      draw_notes_empty_state(frame, content_area, NotesMode::Capture, theme);
+    }
+    NotesMode::PaperNotes | NotesMode::Library => {
+      let visible = notes_browser_visible(app, side);
+      if visible.is_empty() {
+        draw_notes_empty_state(frame, content_area, app.notes_mode_for_side(side), theme);
+      } else if content_area.width >= 72 {
+        let chunks = Layout::horizontal([
+          Constraint::Percentage(44),
+          Constraint::Length(1),
+          Constraint::Percentage(56),
+        ])
+        .split(content_area);
+        draw_notes_browser_list(
+          frame,
+          chunks[0],
+          &visible,
+          notes_browser_selected_index(app, side),
+          is_focused,
+          theme,
+        );
+        frame.render_widget(
+          Paragraph::new("│").style(Style::default().fg(theme.border)),
+          chunks[1],
+        );
+        draw_notes_browser_preview(
+          frame,
+          chunks[2],
+          notes_browser_selected_note(app, side),
+          theme,
+        );
+      } else {
+        let chunks = Layout::vertical([
+          Constraint::Percentage(48),
+          Constraint::Length(1),
+          Constraint::Percentage(52),
+        ])
+        .split(content_area);
+        draw_notes_browser_list(
+          frame,
+          chunks[0],
+          &visible,
+          notes_browser_selected_index(app, side),
+          is_focused,
+          theme,
+        );
+        frame.render_widget(
+          Paragraph::new("─".repeat(chunks[1].width as usize))
+            .style(Style::default().fg(theme.border)),
+          chunks[1],
+        );
+        draw_notes_browser_preview(
+          frame,
+          chunks[2],
+          notes_browser_selected_note(app, side),
+          theme,
+        );
+      }
+    }
+  }
+
+  if popup_active {
+    if let Some(notes_app) = app.notes_app.as_mut() {
+      notes_app.draw_popup_overlay(frame, content_area);
+    }
   }
 }
 
@@ -737,37 +1163,16 @@ fn draw_note_preview(
   active: usize,
   t: &crate::theme::Theme,
 ) {
-  let Some(note_id) = tabs.get(active).map(|tab| tab.note_id.as_str()) else {
-    let hint = Paragraph::new("No note open")
-      .style(Style::default().fg(t.text_dim))
-      .alignment(Alignment::Center);
-    frame.render_widget(hint, area);
-    return;
-  };
-  let Some(note) = app.notes_app.as_ref().and_then(|na| na.get_note(note_id))
-  else {
-    let hint = Paragraph::new("Note not found")
-      .style(Style::default().fg(t.text_dim))
-      .alignment(Alignment::Center);
-    frame.render_widget(hint, area);
-    return;
-  };
-  let mut lines = vec![Line::from(Span::styled(
-    truncate(&note.title, area.width as usize),
-    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
-  ))];
-  lines.push(Line::from(""));
-  let body_w = area.width as usize;
-  for line in textwrap::wrap(&note.content, body_w)
-    .into_iter()
-    .take(area.height.saturating_sub(2) as usize)
-  {
-    lines.push(Line::from(Span::styled(
-      line.into_owned(),
-      Style::default().fg(t.text_dim),
-    )));
-  }
-  frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+  let selected = app
+    .notes_app
+    .as_ref()
+    .and_then(|notes_app| notes_app.get_current_note())
+    .or_else(|| {
+      tabs
+        .get(active)
+        .and_then(|tab| app.notes_app.as_ref().and_then(|na| na.get_note(&tab.note_id)))
+    });
+  draw_notes_browser_preview(frame, area, selected, t);
 }
 
 fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
@@ -814,9 +1219,11 @@ fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
         focused,
         &t,
       );
-      if let Some(editor) = app.reader_editor_mut() {
-        editor.resize(rows[1].width, rows[1].height);
-        tread::draw(frame, rows[1], editor, &tread_theme);
+      let kitty = app.kitty_supported;
+      if let Some(tab) = app.reader_active_tab_mut() {
+        tab.reader.resize(rows[1].width, rows[1].height);
+        tread::draw(frame, rows[1], &tab.reader, &tread_theme);
+        tread::after_draw(&tab.reader, &mut tab.image_state, rows[1], kitty);
       }
     }
     {
@@ -831,9 +1238,11 @@ fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
         focused,
         &t,
       );
-      if let Some(editor) = app.reader_secondary_editor_mut() {
-        editor.resize(rows[1].width, rows[1].height);
-        tread::draw(frame, rows[1], editor, &tread_theme);
+      let kitty = app.kitty_supported;
+      if let Some(tab) = app.reader_secondary_active_tab_mut() {
+        tab.reader.resize(rows[1].width, rows[1].height);
+        tread::draw(frame, rows[1], &tab.reader, &tread_theme);
+        tread::after_draw(&tab.reader, &mut tab.image_state, rows[1], kitty);
       } else {
         let hint = Paragraph::new(
           "No paper loaded\n\nLdr+f → open feed · Enter to load",
@@ -885,9 +1294,11 @@ fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
         true,
         &t,
       );
-      if let Some(editor) = app.reader_editor_mut() {
-        editor.resize(rows[1].width, rows[1].height);
-        tread::draw(frame, rows[1], editor, &tread_theme);
+      let kitty = app.kitty_supported;
+      if let Some(tab) = app.reader_active_tab_mut() {
+        tab.reader.resize(rows[1].width, rows[1].height);
+        tread::draw(frame, rows[1], &tab.reader, &tread_theme);
+        tread::after_draw(&tab.reader, &mut tab.image_state, rows[1], kitty);
       }
     }
     if app.narrow_feed_details_open {
@@ -917,10 +1328,12 @@ fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
       true,
       &t,
     );
-    if let Some(editor) = app.reader_editor_mut() {
+    let kitty = app.kitty_supported;
+    if let Some(tab) = app.reader_active_tab_mut() {
       let elapsed = std::time::Instant::now();
-      editor.resize(rows[1].width, rows[1].height);
-      tread::draw(frame, rows[1], editor, &tread_theme);
+      tab.reader.resize(rows[1].width, rows[1].height);
+      tread::draw(frame, rows[1], &tab.reader, &tread_theme);
+      tread::after_draw(&tab.reader, &mut tab.image_state, rows[1], kitty);
       log::debug!("draw_editor (full-width): {}ms", elapsed.elapsed().as_millis());
     }
     return MainRowRects {
@@ -948,10 +1361,12 @@ fn draw_main_row(frame: &mut Frame, app: &mut App, area: Rect) -> MainRowRects {
         true,
         &t,
       );
-      if let Some(editor) = app.reader_editor_mut() {
+      let kitty = app.kitty_supported;
+      if let Some(tab) = app.reader_active_tab_mut() {
         let elapsed = std::time::Instant::now();
-        editor.resize(rows[1].width, rows[1].height);
-        tread::draw(frame, rows[1], editor, &tread_theme);
+        tab.reader.resize(rows[1].width, rows[1].height);
+        tread::draw(frame, rows[1], &tab.reader, &tread_theme);
+        tread::after_draw(&tab.reader, &mut tab.image_state, rows[1], kitty);
         log::debug!("draw_editor (split): {}ms", elapsed.elapsed().as_millis());
       }
     }
@@ -1724,6 +2139,17 @@ fn draw_narrow_feed(frame: &mut Frame, app: &mut App, area: Rect) {
       }
       y += 1;
     }
+    if y < list_area.y + list_area.height {
+      let spacer_rect =
+        Rect { x: list_area.x, y, width: list_area.width, height: 1 };
+      if is_selected {
+        frame.render_widget(
+          Paragraph::new(Line::from(" ")).style(t.style_selection()),
+          spacer_rect,
+        );
+      }
+      y += 1;
+    }
   }
 }
 
@@ -1761,7 +2187,7 @@ fn count_reader_feed_visible_items(
 }
 
 fn reader_feed_row_height(item: &crate::models::FeedItem, title_w: usize) -> usize {
-  reader_feed_title_lines(&item.title, title_w).len()
+  reader_feed_title_lines(&item.title, title_w).len() + 1
 }
 
 fn reader_feed_title_lines(title: &str, title_w: usize) -> Vec<String> {
@@ -3347,10 +3773,18 @@ fn footer_command_line(app: &App) -> Line<'static> {
       FocusedReader::Primary
     };
     spans.push(Span::styled(app.notes_mode_for_side(side).footer_label(), accent));
-    spans.push(Span::styled(
-      ": edit note | Ldr+[ / ] tabs | Ldr+w close | Ldr+n hide | ? help",
-      ordinary,
-    ));
+    let keys = match app.notes_mode_for_side(side) {
+      NotesMode::Capture => {
+        ": [ / ] modes | n/Enter create | Ldr+n hide | ? help"
+      }
+      NotesMode::PaperNotes => {
+        ": [ / ] modes | j/k move | a attach | x detach | Enter edit | Ldr+[ / ] tabs | Ldr+w close | Ldr+n hide | ? help"
+      }
+      NotesMode::Library => {
+        ": [ / ] modes | j/k move | Enter edit | a attach | x detach | Ldr+[ / ] tabs | Ldr+w close | Ldr+n hide | ? help"
+      }
+    };
+    spans.push(Span::styled(keys, ordinary));
     return Line::from(spans);
   }
 
@@ -3623,9 +4057,14 @@ fn draw_reader_popup(frame: &mut Frame, app: &mut App, area: Rect) {
   frame.render_widget(block, popup_rect);
 
   let tread_theme = app.theme_for_tread();
-  if let Some(editor) = app.reader_popup_editor.as_mut() {
+  let kitty = app.kitty_supported;
+  // Split-borrow so the reader and its image state can both be borrowed —
+  // they live on different App fields.
+  let App { reader_popup_editor, reader_popup_image_state, .. } = app;
+  if let Some(editor) = reader_popup_editor.as_mut() {
     editor.resize(inner.width, inner.height);
     tread::draw(frame, inner, editor, &tread_theme);
+    tread::after_draw(editor, reader_popup_image_state, inner, kitty);
   }
 }
 
@@ -3726,7 +4165,7 @@ fn draw_narrow_feed_details_popup(frame: &mut Frame, app: &App, area: Rect) {
 
 // ── A2 State 3: persistent Feed Drawer (feed list or details) ──────────────
 
-fn draw_reader_bottom_pane(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_reader_bottom_pane(frame: &mut Frame, app: &mut App, area: Rect) {
   let t = app.theme();
   const POPUP_H: u16 = 11; // border(2) + hint row(1) + sep(1) + content(7)
   let popup_w = (area.width as u32 * 60 / 100) as u16;
@@ -3804,24 +4243,35 @@ fn draw_bottom_pane_details(frame: &mut Frame, app: &App, area: Rect) {
   frame.render_widget(para, rows[1]);
 }
 
-fn draw_bottom_pane_feed(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_bottom_pane_feed(frame: &mut Frame, app: &mut App, area: Rect) {
   let t = app.theme();
-  let items = app.visible_items();
   let sel = app.reader_feed_popup_selected;
   let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)])
     .split(area);
   let header_area = rows[0];
   let list_area = rows[1];
-  let max_visible = list_area.height as usize;
+  let viewport_rows = list_area.height as usize;
+  if viewport_rows == 0 {
+    return;
+  }
 
   // Auto-scroll offset to keep selection visible.
-  let offset = if sel >= max_visible { sel - max_visible + 1 } else { 0 };
+  let mut offset = app.reader_bottom_scroll;
+  let total = app.visible_count();
+  if sel < offset {
+    offset = sel;
+  } else if sel >= offset.saturating_add(viewport_rows) {
+    offset = sel + 1 - viewport_rows;
+  }
+  offset = offset.min(total.saturating_sub(1));
+  app.reader_bottom_scroll = offset;
 
   frame.render_widget(
     Paragraph::new(drawer_feed_header_line(list_area.width as usize, &t)),
     header_area,
   );
 
+  let items = app.visible_items();
   if items.is_empty() {
     let empty = if app.search_query.is_empty() {
       "No items"
@@ -3837,7 +4287,12 @@ fn draw_bottom_pane_feed(frame: &mut Frame, app: &App, area: Rect) {
     return;
   }
 
-  for (i, item) in items.iter().enumerate().skip(offset).take(max_visible) {
+  for (i, item) in items
+    .iter()
+    .enumerate()
+    .skip(offset)
+    .take(viewport_rows)
+  {
     let is_selected = i == sel;
     let row_y = list_area.y + (i - offset) as u16;
     let row_rect = Rect::new(list_area.x, row_y, list_area.width, 1);
@@ -5435,6 +5890,38 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
       ("Ldr+w", "Close current tab"),
       ("Voice", "r read · R read from cursor · Ctrl+p continuous"),
       ("Playback", "Space pause/resume · c re-centre · Esc stop"),
+    ],
+  ),
+  (
+    "Repo Viewer",
+    &[
+      ("j / k", "Move in tree or scroll preview"),
+      ("Enter", "Open file or folder"),
+      ("b / Backspace", "Go to parent directory"),
+      ("Tab", "Switch tree / preview focus"),
+      ("h / l", "Pan preview left / right"),
+      ("+ / -", "Adjust markdown wrap width"),
+      ("o", "Open current GitHub URL in browser"),
+      ("y / u", "Copy path / GitHub URL"),
+      ("c", "Draft repo context into chat"),
+      ("d", "Download current file"),
+      ("q / Esc", "Close repo viewer"),
+    ],
+  ),
+  (
+    "Notes",
+    &[
+      ("Ldr+n", "Open notes from current context"),
+      ("[ / ]", "Cycle mode: Paper Notes / Library / Capture"),
+      ("j / k", "Move note selection"),
+      ("g / G", "Jump to first / last note"),
+      ("PageUp / PageDown", "Move by page"),
+      ("n / Enter", "In Capture, open the prefilled linked-note composer"),
+      ("Enter", "In Library/Paper Notes, edit the selected note"),
+      ("a / x", "Attach / detach current paper on selected note"),
+      ("Ldr+[ / ]", "Previous / next note tab"),
+      ("Ldr+w", "Close active note tab"),
+      ("Esc", "Back out of editor/popups, then close notes pane"),
     ],
   ),
   (

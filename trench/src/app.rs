@@ -481,6 +481,12 @@ pub struct App {
   /// Cross-tab preemption (only one paper speaks at a time) is handled
   /// by tread's session-id machinery — see voice/playback.rs.
   pub voice_controller: Arc<tread::PlaybackController>,
+  /// Whether the host terminal speaks the Kitty graphics protocol.
+  /// Detected once at App::new via `tread::detect_kitty_supported`.
+  /// Threaded into `tread::after_draw` calls so figures emit APC
+  /// escapes only on graphics-capable terminals; on others, the
+  /// hook is a no-op and tread's text-fallback caption renders.
+  pub kitty_supported: bool,
 
   // Secondary split view (A2 — Ldr+f cycles three reader/feed states)
   // State 1: normal feed (reader_split_active=false, reader_dual_active=false)
@@ -655,6 +661,7 @@ impl App {
       reader_popup_editor: None,
       reader_popup_image_state: tread::ImageState::default(),
       voice_controller: tread::build_voice_controller(),
+      kitty_supported: tread::detect_kitty_supported(),
       reader_split_active: false,
       reader_dual_active: false,
       reader_secondary_tabs: Vec::new(),
@@ -1685,6 +1692,133 @@ impl App {
     }
   }
 
+  pub fn repo_copy_url(&mut self) {
+    let Some(url) = self.repo_current_url() else {
+      self.set_repo_status("No repo URL available.".to_string());
+      return;
+    };
+
+    match arboard::Clipboard::new() {
+      Ok(mut cb) => match cb.set_text(&url) {
+        Ok(()) => self.set_repo_status(format!("Copied URL: {url}")),
+        Err(e) => self.set_repo_status(format!("Clipboard error: {e}")),
+      },
+      Err(e) => self.set_repo_status(format!("Clipboard unavailable: {e}")),
+    }
+  }
+
+  pub fn repo_current_url(&self) -> Option<String> {
+    let ctx = self.repo_context.as_ref()?;
+    let base = format!("https://github.com/{}/{}", ctx.owner, ctx.repo_name);
+    let branch = if ctx.default_branch.is_empty() {
+      "HEAD"
+    } else {
+      ctx.default_branch.as_str()
+    };
+
+    match ctx.pane_focus {
+      RepoPane::File => {
+        let path = ctx.file_path.as_deref().or(ctx.file_name.as_deref())?;
+        Some(format!(
+          "{base}/blob/{branch}/{}",
+          encode_repo_url_path(path)
+        ))
+      }
+      RepoPane::Tree => {
+        if let Some(node) = ctx.tree_nodes.get(ctx.tree_cursor) {
+          let route = match node.node_type {
+            crate::github::NodeType::Dir => "tree",
+            crate::github::NodeType::File => "blob",
+          };
+          Some(format!(
+            "{base}/{route}/{branch}/{}",
+            encode_repo_url_path(&node.path)
+          ))
+        } else if ctx.tree_path.is_empty() {
+          Some(base)
+        } else {
+          Some(format!(
+            "{base}/tree/{branch}/{}",
+            encode_repo_url_path(&ctx.tree_path)
+          ))
+        }
+      }
+    }
+  }
+
+  pub fn repo_chat_prompt(&self) -> Option<String> {
+    let ctx = self.repo_context.as_ref()?;
+    let selected_path = match ctx.pane_focus {
+      RepoPane::File => ctx.file_path.clone().or_else(|| ctx.file_name.clone()),
+      RepoPane::Tree => ctx
+        .tree_nodes
+        .get(ctx.tree_cursor)
+        .map(|node| node.path.clone())
+        .or_else(|| {
+          if ctx.tree_path.is_empty() {
+            None
+          } else {
+            Some(ctx.tree_path.clone())
+          }
+        }),
+    };
+
+    let mut prompt = format!(
+      "Help me inspect this repository context.\n\nRepository: {}/{}\nBranch: {}\n",
+      ctx.owner,
+      ctx.repo_name,
+      if ctx.default_branch.is_empty() {
+        "unknown"
+      } else {
+        &ctx.default_branch
+      }
+    );
+
+    if let Some(path) = selected_path.as_deref() {
+      prompt.push_str(&format!("Selected path: {path}\n"));
+    }
+    prompt.push_str(&format!(
+      "Pane: {}\n",
+      match ctx.pane_focus {
+        RepoPane::Tree => "tree",
+        RepoPane::File => "preview",
+      }
+    ));
+
+    if let Some(url) = self.repo_current_url() {
+      prompt.push_str(&format!("GitHub URL: {url}\n"));
+    }
+
+    if let Some(file_name) = ctx.file_name.as_deref() {
+      prompt.push_str(&format!(
+        "Open file: {file_name}\nFile kind: {}\n",
+        repo_file_kind_label(ctx.file_kind)
+      ));
+
+      let excerpt = ctx.raw_file_content.trim();
+      if !excerpt.is_empty() {
+        let truncated = truncate_repo_excerpt(excerpt, 3500);
+        prompt.push_str("\nFile excerpt:\n```text\n");
+        prompt.push_str(&truncated);
+        if !truncated.ends_with('\n') {
+          prompt.push('\n');
+        }
+        prompt.push_str("```\n");
+      }
+    } else if !ctx.tree_nodes.is_empty() {
+      prompt.push_str("\nVisible tree entries:\n");
+      for node in ctx.tree_nodes.iter().take(12) {
+        let kind = match node.node_type {
+          crate::github::NodeType::Dir => "dir",
+          crate::github::NodeType::File => "file",
+        };
+        prompt.push_str(&format!("- {kind}: {}\n", node.path));
+      }
+    }
+
+    Some(prompt)
+  }
+
   /// Save the current open file to ~/Downloads/{filename}.
   // (validate_download_name is defined as a free function below.)
   pub fn repo_download_file(&mut self) {
@@ -1718,6 +1852,15 @@ impl App {
         Ok(()) => self.set_repo_status(format!("Saved to {}", path.display())),
         Err(e) => self.set_repo_status(format!("Download failed: {e}")),
       }
+    }
+  }
+
+  pub fn repo_status_label(&self) -> Option<String> {
+    let ctx = self.repo_context.as_ref()?;
+    if ctx.no_token {
+      Some("token required".to_string())
+    } else {
+      ctx.status_message.clone().or_else(|| Some("ready".to_string()))
     }
   }
 
@@ -2120,6 +2263,40 @@ impl App {
       crate::store::save(&self.persisted_states);
     }
   }
+}
+
+fn repo_file_kind_label(kind: RepoFileKind) -> &'static str {
+  match kind {
+    RepoFileKind::Markdown => "markdown",
+    RepoFileKind::Code => "code",
+    RepoFileKind::PlainText => "text",
+  }
+}
+
+fn encode_repo_url_path(path: &str) -> String {
+  let mut out = String::with_capacity(path.len());
+  for &b in path.as_bytes() {
+    let safe = b.is_ascii_alphanumeric()
+      || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/');
+    if safe {
+      out.push(b as char);
+    } else {
+      out.push_str(&format!("%{b:02X}"));
+    }
+  }
+  out
+}
+
+fn truncate_repo_excerpt(text: &str, max_chars: usize) -> String {
+  if text.chars().count() <= max_chars {
+    return text.to_string();
+  }
+  let mut out = String::new();
+  for c in text.chars().take(max_chars.saturating_sub(1)) {
+    out.push(c);
+  }
+  out.push('…');
+  out
 }
 
 // ---------------------------------------------------------------------------
@@ -2802,10 +2979,32 @@ impl App {
     }
   }
 
+  /// Clear the image cache for every open reader tab + the popup.
+  /// Called on `Event::Resize` (placements were anchored to the old
+  /// rect coords) and `Event::FocusLost` (tmux pane switch — leftover
+  /// kitty placements would bleed into whatever pane sits on top of
+  /// us).  Cheap: each ImageState is just a small HashMap.
+  pub fn clear_all_reader_image_state(&mut self) {
+    for tab in self.reader_tabs.iter_mut() {
+      tread::clear_images(&mut tab.image_state);
+    }
+    for tab in self.reader_secondary_tabs.iter_mut() {
+      tread::clear_images(&mut tab.image_state);
+    }
+    tread::clear_images(&mut self.reader_popup_image_state);
+  }
+
   /// Close the active primary tab. Returns true if the pane is now empty.
   pub fn reader_close_active_tab(&mut self) -> bool {
     if self.reader_tabs.is_empty() {
       return true;
+    }
+    // Clear the image cache before drop so any pixel placements the
+    // terminal still has cached for this tab's kitty_ids are deleted
+    // — otherwise they linger as ghost overlays on whichever tab
+    // takes its slot.
+    if let Some(tab) = self.reader_tabs.get_mut(self.reader_active_tab) {
+      tread::clear_images(&mut tab.image_state);
     }
     self.reader_tabs.remove(self.reader_active_tab);
     if self.reader_tabs.is_empty() {
@@ -2821,6 +3020,9 @@ impl App {
   pub fn reader_secondary_close_active_tab(&mut self) -> bool {
     if self.reader_secondary_tabs.is_empty() {
       return true;
+    }
+    if let Some(tab) = self.reader_secondary_tabs.get_mut(self.reader_secondary_active_tab) {
+      tread::clear_images(&mut tab.image_state);
     }
     self.reader_secondary_tabs.remove(self.reader_secondary_active_tab);
     if self.reader_secondary_tabs.is_empty() {
